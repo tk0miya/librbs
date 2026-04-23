@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+
+require "bundler/setup"
+require "rbs"
+require "rbs/sorter"
+
+ARGV.map {|f| Pathname(f) }.each do |path|
+  RBS::Sorter.new(path).run
+end
