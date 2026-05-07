@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/librbs-core",
+    "ext/librbs",
+]
+# Keep our workspace from picking up vendor/rbs/rust/Cargo.toml's nested
+# workspace. We depend on vendor crates as path dependencies instead.
+exclude = ["vendor"]
+
+[profile.release]
+debug = true

@@ -27,11 +27,12 @@ through a Rust-backed implementation. User code is not modified.
 
 - The repository currently contains nothing except `vendor/rbs/` (the upstream
   RBS gem source, pinned at v4.0.2).
-- The upstream Rust crates (`vendor/rbs/rust/ruby-rbs-sys`,
-  `vendor/rbs/rust/ruby-rbs`) already provide a C parser FFI and a Rust AST.
-  We **depend on them via Cargo path dependencies**; we never copy or fork
-  them. Upstream version bumps go through `vendor/rbs`'s existing
-  `rake rust:rbs:pin[VERSION]` workflow.
+- The upstream Rust crates (`ruby-rbs`, `ruby-rbs-sys`) already provide a C
+  parser FFI and a Rust AST. We **depend on them as published crates from
+  crates.io**; we never copy or fork them. The mirrored sources at
+  `vendor/rbs/rust/{ruby-rbs,ruby-rbs-sys}/` exist purely for code reading
+  and reference — they are not part of the build graph. Upstream version
+  bumps are made by editing the version constraints in our `Cargo.toml`.
 
 ## Non-goals
 
