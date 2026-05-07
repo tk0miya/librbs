@@ -17,8 +17,10 @@ All paths are relative to `vendor/rbs/`. The pinned RBS version is v4.0.2
 | `rust/ruby-rbs/tests/sanity.rs` | Confirms every RBS file in core+stdlib parses |
 | `rust/rbs_version` | Pinned RBS version (v4.0.2) |
 
-We **depend on these crates via Cargo path dependencies** from
-`crates/librbs-core` and `crates/librbs-ruby`. We do not copy or fork them.
+We **depend on the published `ruby-rbs` and `ruby-rbs-sys` crates from
+crates.io**, not on these in-tree copies. The files under `vendor/rbs/rust/`
+are kept as a reference for reading the upstream Rust code at the pinned
+version; the build does not touch them.
 
 ## C parser internals
 
