@@ -221,14 +221,14 @@ end
 
 ## Acceptance
 
-- [ ] `cargo test -p librbs-core` is green.
-- [ ] core+stdlib loading succeeds on the Rust side, and `class_decls.len()`
+- [x] `cargo test -p librbs-core` is green.
+- [x] core+stdlib loading succeeds on the Rust side, and `class_decls.len()`
       lands in the same order of magnitude as pure RBS
       (`RBS::Environment.from_loader(RBS::EnvironmentLoader.new).class_decls.size`).
       An exact match isn't required yet (M3 will pin it down). A 1% delta is
       acceptable.
-- [ ] `Librbs::Native.build_environment_count` runs without errors.
-- [ ] All CI jobs are green.
+- [x] `Librbs::Native.build_environment_count` runs without errors.
+- [x] All CI jobs are green.
 
 ## Out of scope for this milestone
 
