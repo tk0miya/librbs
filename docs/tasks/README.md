@@ -19,7 +19,7 @@ through a Rust-backed implementation. User code is not modified.
 | [reference.md](reference.md) | Locations in `vendor/rbs` to reference |
 | [milestones/M1-skeleton.md](milestones/M1-skeleton.md) | Skeleton setup |
 | [milestones/M2-discovery-and-parse.md](milestones/M2-discovery-and-parse.md) | Parallel file discovery and parsing |
-| [milestones/M3-environment-and-resolver.md](milestones/M3-environment-and-resolver.md) | Side-table resolver and compatibility tests (**main milestone**) |
+| [milestones/M3-environment-and-resolver.md](milestones/M3-environment-and-resolver.md) | Side-table resolver and compatibility tests (**main milestone**, split into [M3a–M3f](milestones/M3/README.md)) |
 | [milestones/M4-decision-point.md](milestones/M4-decision-point.md) | Benchmark measurement and next-phase decision |
 | [milestones/M5-incremental.md](milestones/M5-incremental.md) | In-process incremental updates |
 | [followups.md](followups.md) | Items deferred from a milestone, with the trigger that should pull them in |
