@@ -22,6 +22,7 @@ through a Rust-backed implementation. User code is not modified.
 | [milestones/M3-environment-and-resolver.md](milestones/M3-environment-and-resolver.md) | Side-table resolver and compatibility tests (**main milestone**) |
 | [milestones/M4-decision-point.md](milestones/M4-decision-point.md) | Benchmark measurement and next-phase decision |
 | [milestones/M5-incremental.md](milestones/M5-incremental.md) | In-process incremental updates |
+| [followups.md](followups.md) | Items deferred from a milestone, with the trigger that should pull them in |
 
 ## Background
 
