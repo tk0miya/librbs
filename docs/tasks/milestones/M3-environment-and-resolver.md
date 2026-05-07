@@ -1,5 +1,10 @@
 # M3: Environment and Type-Name Resolution (**main milestone**)
 
+> **This milestone is delivered as six PRs, not one.**
+> See [M3/README.md](M3/README.md) for the slice index. The rest of this
+> document is the shared design reference; each slice's own doc states its
+> scope, dependencies, and per-slice acceptance.
+
 ## Goal
 
 Implement a side-table-based `TypeNameResolver` so that
@@ -58,6 +63,25 @@ The return values of `build_environment` and `resolve_type_names` are
 **genuine `RBS::Environment` instances** carrying a Rust handle in an ivar.
 
 ## Tasks
+
+The numbered tasks below are the original task list. Each is now owned by
+one of the slices listed in [M3/README.md](M3/README.md):
+
+| Task | Slice |
+|---|---|
+| 1. Port TypeNameResolver | M3a |
+| 2. Port UseMap | M3a (data structures) + M3b (clause walking) |
+| 3. Resolution side-table | M3a |
+| 4. Resolution driver | M3b |
+| 5. Parallelization | M3b |
+| 6. Canonical dump | M3b (Rust side, format spec) + M3c (Ruby side helper) |
+| 7. Native API | M3c (`build_environment`, `canonical_dump`) + M3d (`resolve_type_names`) + M3e (`materialize_all`) |
+| 8. AST → Ruby conversion | M3e |
+| 9. Patch layer | M3c (loader + `from_loader`) + M3d (`resolve_type_names`) + M3e (accessor patches + `ensure_materialized`) + M3f (hardening) |
+| 10. Compatibility tests | M3c (core unresolved) + M3d (core resolved) + M3f (core+stdlib + gems) |
+| 11. Test matrix | M3f |
+
+The remaining sections describe the design contract that all slices share.
 
 ### 1. Port TypeNameResolver
 
