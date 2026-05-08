@@ -15,6 +15,61 @@ belong in this list.
 
 ## Open
 
+### Reimplement `RBS::Environment` and `RBS::EnvironmentLoader` in Rust
+
+- **Origin**: M3c review.
+- **Where**: today — `lib/librbs/patches/environment.rb`,
+  `lib/librbs/patches/environment_loader.rb`, and the magnus bridge in
+  `ext/librbs/src/lib.rs` that reads the loader's ivars to build a
+  Rust `Loader`. End state — pure-Rust `Environment` / `Loader`
+  exposed across the magnus boundary, with the Ruby classes as thin
+  facades (or removed entirely from the user's view).
+- **What**: The current strategy is *patch-based*. The two upstream
+  Ruby classes stay in place; we monkey-patch entry points
+  (`Environment.from_loader`, soon `resolve_type_names`,
+  `class_decls` etc.) to delegate into Rust. This is the right shape
+  for "drop-in speedup via `require 'librbs'`" and for landing
+  M3c–M3f without a re-architecture, but it carries permanent costs:
+  - We pay an ivar-reading round trip on every loader-shaped input
+    (`@core_root`, `@repository.@dirs`, `@libs`, `@dirs`).
+  - Stringio injection and other load-time side effects have to be
+    re-implemented in Rust to match the Ruby semantics
+    (see `inject_stringio` in the magnus bridge).
+  - Patches accumulate as we hook more entry points; behavioral
+    drift between "with librbs" and "without librbs" gets harder to
+    audit the more surface area we cover.
+  - `@__librbs_handle` is an out-of-band attribute on `RBS::*`
+    instances that anyone calling `Marshal.dump` / `dup` /
+    `initialize_copy` could lose silently.
+- **Ideal goal**: rewrite `Environment` and `EnvironmentLoader` as
+  pure-Rust types and expose them through magnus as the canonical
+  implementation (i.e. `RBS::Environment` and
+  `RBS::EnvironmentLoader` themselves become magnus-wrapped Rust
+  objects). The Ruby class definitions in `vendor/rbs/lib/rbs/...`
+  would no longer be the authority; the patches would dissolve.
+- **Required changes** (sketch — order TBD):
+  - Hoist `librbs_core::Loader` / `librbs_core::Environment` to
+    public Ruby classes via `magnus::wrap`, with method surfaces
+    that match upstream's public API (`add`, `add_collection`,
+    `each_signature`, `class_decls`, ...).
+  - Replace the monkey-patches under `lib/librbs/patches/` with
+    `RBS::Environment = Librbs::Environment` (and equivalent for
+    Loader), guarded by a single `librbs/patches.rb` switch.
+  - Decide what to do with the existing `RBS::*` classes — leave
+    them dormant (still loadable for users who `without_librbs`),
+    or vendor a stub that errors if invoked unpatched.
+  - Audit downstream consumers (`steep`, `rubocop-rbs`, etc.) for
+    code that depends on `RBS::Environment` being a plain Ruby
+    object (e.g. instance variable access, `Marshal`, `inspect`
+    format). Each such hook is a compatibility constraint on the
+    Rust facade.
+- **When**: Not a near-term blocker. M3c–M3f finish on the patch
+  path. Revisit at M4 (decision point) once benchmark numbers tell
+  us how much the ivar-reading round trips and patch overhead
+  actually cost; if they're significant, the rewrite becomes the
+  natural next step. If they're not, the patches can stay
+  indefinitely and this followup becomes a nice-to-have.
+
 ### Full `Gem::Version` semantics in `librbs-core`
 
 - **Origin**: M2 review.
@@ -119,36 +174,40 @@ belong in this list.
   Don't do it as a standalone PR before then — the change is mechanical
   but touches enough sites to be noisy in review.
 
-### Rust-side `canonical_dump` implementation
+### Rust-side `canonical_dump` implementation (frozen)
 
-- **Origin**: M3b review.
-- **Where**: `crates/librbs-core/src/canonical.rs` (deleted at the end
-  of M3b). The canonical-dump format spec lives in M3c, alongside the
-  Ruby-side dumper that consumes it.
-- **What**: M3b initially shipped a Rust-side `canonical_dump` so the
-  M3 lazy-boundary contract held even during compatibility tests
-  (Ruby-side dumping would force materialization). On review we
-  decided the simpler path is to defer the Rust dumper and let M3c's
-  Ruby-side `canonical_dump` walk the materialized env, accepting
-  that compatibility runs trigger materialization. The Rust file and
-  its standalone format-spec doc were removed; M3c rebuilds the spec
-  as part of writing the Ruby dumper.
-- **Trigger**: If the Ruby-side `canonical_dump` becomes too slow on
-  the core / core+stdlib / gems compatibility matrix to be practical
-  in CI, port the dumper back to Rust and call it across the magnus
-  boundary so the dump runs without materializing.
+- **Origin**: M3b review, refrozen during M3c.
+- **Where**: `crates/librbs-core/src/canonical.rs` (does not exist).
+  The Ruby-side dumper at `spec/support/canonical_dump.rb` defines
+  the only canonical-dump format we currently produce; its shape is
+  pinned by a top-of-file comment and is otherwise private to the
+  M3 compat specs.
+- **What**: The M3 series originally planned for a Rust-side dumper
+  to keep the lazy-boundary contract intact under compat tests. M3c
+  briefly shipped one, a separate format-spec doc, and a
+  `Librbs::Native.canonical_dump` magnus bridge to drive it. We
+  later reverted all three: the simpler path is to let the Ruby
+  helper walk the env (post-materialization at M3e+) and accept
+  that compat runs trigger materialization. Only the Ruby helper
+  remains; the Rust file, the format-spec doc, and the magnus
+  bridge were removed.
+- **Trigger**: If the Ruby-side dumper's wall-clock time on the core
+  / core+stdlib / gems compat matrix becomes a CI bottleneck, port
+  the dumper back to Rust and reintroduce the magnus bridge so dumps
+  do not force materialization.
 - **Required changes** (when triggered):
-  - Restore `crates/librbs-core/src/canonical.rs` from
-    `git show 0d449d6:crates/librbs-core/src/canonical.rs` (the
-    initial M3b implementation) or the dedup'd version in
-    `b313b1c`.
+  - Promote the format-shape comment in `spec/support/canonical_dump.rb`
+    into a written cross-language spec (likely
+    `docs/tasks/milestones/M3/CANONICAL_FORMAT.md`) so Rust and Ruby
+    cannot drift silently.
+  - Add `crates/librbs-core/src/canonical.rs` whose output is
+    byte-identical to the Ruby helper for the same logical
+    environment.
   - Re-export it via `pub mod canonical;` in `lib.rs`.
-  - Re-add the snapshot fixtures from the M3b version of
-    `tests/resolution.rs` (`canonical_dump_simple_fixture_is_stable`
-    et al.) so the format does not drift silently.
-  - Bridge through magnus (`Librbs::Native.canonical_dump`) so M3c+
-    compatibility specs can call the Rust dumper instead of the
-    Ruby helper.
+  - Add snapshot fixtures so format drift is caught at the Rust
+    layer, not only at the magnus boundary.
+  - Bridge through magnus (`Librbs::Native.canonical_dump`) so compat
+    specs can call the Rust dumper instead of the Ruby helper.
 - **When**: Only when the Ruby-side dumper's wall-clock time on the
   full compatibility matrix becomes a CI bottleneck. Don't pre-empt
   it.
