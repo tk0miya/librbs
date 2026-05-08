@@ -139,6 +139,40 @@ impl NamespaceInterner {
         path.extend(rpath);
         self.intern_owned(path, labs)
     }
+
+    /// `RBS::Namespace#empty?` — true when the path has no segments,
+    /// regardless of the absolute flag.
+    pub fn is_empty(&self, ns: NamespaceSym) -> bool {
+        self.lookup(ns).0.is_empty()
+    }
+
+    /// `RBS::Namespace#relative?` — true when not absolute.
+    pub fn is_relative(&self, ns: NamespaceSym) -> bool {
+        !self.lookup(ns).1
+    }
+
+    /// `RBS::Namespace#parent` — drop the last segment, preserving
+    /// `absolute`. Returns `None` for namespaces with no segments
+    /// (the empty relative or root absolute have no parent).
+    pub fn parent(&mut self, ns: NamespaceSym) -> Option<NamespaceSym> {
+        let (path, absolute) = self.lookup(ns).clone();
+        if path.is_empty() {
+            return None;
+        }
+        let mut parent = path;
+        parent.pop();
+        Some(self.intern_owned(parent, absolute))
+    }
+
+    /// `RBS::Namespace#to_type_name` — split into `(parent_namespace, last_segment)`.
+    /// Returns `None` for namespaces with no segments.
+    pub fn to_type_name(&mut self, ns: NamespaceSym) -> Option<(NamespaceSym, Sym)> {
+        let (path, absolute) = self.lookup(ns).clone();
+        let last = *path.last()?;
+        let mut parent = path;
+        parent.pop();
+        Some((self.intern_owned(parent, absolute), last))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -256,5 +290,34 @@ mod tests {
         assert_eq!(TypeNameKind::detect("Foo"), TypeNameKind::Class);
         assert_eq!(TypeNameKind::detect("_Each"), TypeNameKind::Interface);
         assert_eq!(TypeNameKind::detect("foo_t"), TypeNameKind::TypeAlias);
+    }
+
+    #[test]
+    fn namespace_parent_drops_last_segment_preserving_absolute() {
+        let mut ni = NamespaceInterner::new();
+        let foo = ni.intern(&[Sym(0)], true);
+        let foo_bar = ni.append(foo, Sym(1));
+        // ::Foo::Bar -> ::Foo
+        assert_eq!(ni.parent(foo_bar), Some(foo));
+        // ::Foo -> ::
+        assert_eq!(ni.parent(foo), Some(ni.root_absolute()));
+        // Relative form preserves absolute=false.
+        let rel_foo = ni.intern(&[Sym(0)], false);
+        assert_eq!(ni.parent(rel_foo), Some(ni.empty_relative()));
+        // Empty namespaces have no parent.
+        assert_eq!(ni.parent(ni.root_absolute()), None);
+        assert_eq!(ni.parent(ni.empty_relative()), None);
+    }
+
+    #[test]
+    fn namespace_to_type_name_splits_or_returns_none_for_empty() {
+        let mut ni = NamespaceInterner::new();
+        let foo = ni.intern(&[Sym(0)], true);
+        let foo_bar = ni.append(foo, Sym(1));
+        // ::Foo::Bar -> (::Foo, Bar)
+        assert_eq!(ni.to_type_name(foo_bar), Some((foo, Sym(1))));
+        // Empty namespaces cannot be split.
+        assert_eq!(ni.to_type_name(ni.root_absolute()), None);
+        assert_eq!(ni.to_type_name(ni.empty_relative()), None);
     }
 }

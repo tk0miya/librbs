@@ -4,6 +4,7 @@ use rayon::prelude::*;
 
 pub mod entry;
 pub mod insert;
+pub mod resolution;
 pub mod use_map;
 
 pub use entry::{

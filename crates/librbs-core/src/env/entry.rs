@@ -88,6 +88,7 @@ pub struct GlobalEntry {
 #[derive(Debug)]
 pub struct ClassAliasEntry {
     pub name: TypeNameSym,
+    pub old_name: TypeNameSym,
     pub context: Context,
     pub decl: DeclRef,
 }
@@ -95,6 +96,7 @@ pub struct ClassAliasEntry {
 #[derive(Debug)]
 pub struct ModuleAliasEntry {
     pub name: TypeNameSym,
+    pub old_name: TypeNameSym,
     pub context: Context,
     pub decl: DeclRef,
 }
@@ -110,6 +112,20 @@ impl ClassAliasLikeEntry {
         match self {
             ClassAliasLikeEntry::Class(c) => c.name,
             ClassAliasLikeEntry::Module(m) => m.name,
+        }
+    }
+
+    pub fn old_name(&self) -> TypeNameSym {
+        match self {
+            ClassAliasLikeEntry::Class(c) => c.old_name,
+            ClassAliasLikeEntry::Module(m) => m.old_name,
+        }
+    }
+
+    pub fn context(&self) -> &Context {
+        match self {
+            ClassAliasLikeEntry::Class(c) => &c.context,
+            ClassAliasLikeEntry::Module(m) => &m.context,
         }
     }
 }

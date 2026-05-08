@@ -195,6 +195,7 @@ fn insert_decl(
         Node::ClassAlias(ca) => {
             let inner = intern_type_name(env, &ca.new_name());
             let name = env.interner.with_prefix(namespace, inner);
+            let old_name = intern_type_name(env, &ca.old_name());
             check_constant_collision(env, name)?;
             if env.class_decls.contains_key(&name) {
                 return Err(Error::DuplicatedDeclaration {
@@ -205,6 +206,7 @@ fn insert_decl(
                 name,
                 ClassAliasLikeEntry::Class(ClassAliasEntry {
                     name,
+                    old_name,
                     context: context.clone(),
                     decl: decl_ref,
                 }),
@@ -213,6 +215,7 @@ fn insert_decl(
         Node::ModuleAlias(ma) => {
             let inner = intern_type_name(env, &ma.new_name());
             let name = env.interner.with_prefix(namespace, inner);
+            let old_name = intern_type_name(env, &ma.old_name());
             check_constant_collision(env, name)?;
             if env.class_decls.contains_key(&name) {
                 return Err(Error::DuplicatedDeclaration {
@@ -223,6 +226,7 @@ fn insert_decl(
                 name,
                 ClassAliasLikeEntry::Module(ModuleAliasEntry {
                     name,
+                    old_name,
                     context: context.clone(),
                     decl: decl_ref,
                 }),

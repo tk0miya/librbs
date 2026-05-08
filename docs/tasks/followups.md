@@ -90,25 +90,34 @@ belong in this list.
 - **When**: After we have benchmark numbers (M4) and only if this surfaces
   as a hotspot.
 
-### `NamespaceInterner` API gaps and responsibility split
+### `HashMap` vs `FxHashMap` inconsistency
 
-- **Origin**: M2 review.
-- **Where**: `crates/librbs-core/src/interner.rs`.
-- **What**: `NamespaceInterner` currently mixes two responsibilities — an
-  ID registry (`map`, `rev`, `intern_owned`, `lookup`) and value-level
-  operations on namespaces (`append`, `join`). This is fine for now and
-  matches the usual Rust interning idiom (e.g. `string-interner`'s
-  `get_or_intern`). Missing operations to add as M3 needs them: Ruby's
-  `RBS::Namespace` has `parent`, `to_type_name`, `empty?`, `relative?`,
-  `absolute!`, `relative!`, `==` via path/absolute. `parent` will
-  definitely be needed by the M3 `TypeNameResolver` port
-  (`resolve_namespace0` walks parent namespaces). Add operations as they
-  are needed, and at that point reconsider whether to keep them on the
-  interner or move them onto a thin `Namespace` value or `NamespaceSym`
-  extension.
-- **When**: As part of M3 when porting `TypeNameResolver` /
-  `resolve_namespace0`. Don't pre-implement operations we don't have a
-  caller for.
+- **Origin**: M3a review.
+- **Where**: `crates/librbs-core/src/` — currently mixed:
+  - `std::collections::HashMap` in `interner.rs`, `env/mod.rs`,
+    `discovery/repository.rs` (predates M3a).
+  - `rustc_hash::FxHashMap` / `FxHashSet` in `resolver/`, `env/use_map.rs`,
+    `env/resolution.rs` (added in M3a because the spec required the
+    `rustc-hash` dependency).
+- **What**: Every hash key in `librbs-core` today is internally generated
+  by the parser/interner (`TypeNameSym`, `Sym`, `(NamespaceSym, Sym,
+  kind)`, gem-name strings). None of them are part of a HashDoS threat
+  model, so the SipHash default in `std::HashMap` is paying for nothing.
+  Switching the remaining sites to `FxHashMap` would be a uniform speed
+  win and remove the cognitive overhead of "why this one and not that
+  one". The split today is purely an artifact of when each module was
+  written, not a deliberate boundary.
+- **Required changes**:
+  - Replace `std::collections::HashMap` with `rustc_hash::FxHashMap`
+    (and `HashSet` → `FxHashSet`) across `interner.rs`, `env/mod.rs`,
+    `discovery/repository.rs`. `FxHash*` are drop-in for the API surface
+    we use (`new`/`default`/`insert`/`get`/`entry`/iteration).
+  - Audit any newly-added module to use `FxHash*` by default unless a
+    HashDoS-relevant key is introduced.
+- **When**: Bundle with the M4 benchmarking pass, where we will already
+  be looking at hot paths and can confirm the swap helps in practice.
+  Don't do it as a standalone PR before then — the change is mechanical
+  but touches enough sites to be noisy in review.
 
 ### Byte ↔ character offset bridge for `RBS::Location`
 
