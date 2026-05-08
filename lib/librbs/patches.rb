@@ -4,3 +4,6 @@ module Librbs
   module Patches
   end
 end
+
+require "librbs/patches/environment_loader"
+require "librbs/patches/environment"

@@ -26,7 +26,7 @@ The six acceptance checkboxes in the parent M3 doc are satisfied as follows:
 | Acceptance item (parent) | Slice that closes it |
 |---|---|
 | All `cargo test -p librbs-core` tests are green | M3a, M3b |
-| Canonical dumps for core only match pure RBS exactly | M3c (after Ruby-side helper exists) and verified again at M3f |
+| Canonical dumps for core only match pure RBS exactly | M3e (Ruby-side helper exists from M3c, but needs materialization to walk a populated env) and verified again at M3f |
 | Canonical dumps for core + stdlib match pure RBS exactly | M3f |
 | Major-gems matrix is green | M3f |
 | `from_loader` / `resolve_type_names` native paths never call Ruby | M3d (code review at the end of the slice) |

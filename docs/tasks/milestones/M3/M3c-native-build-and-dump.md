@@ -108,30 +108,27 @@ that's M3d.
 
 Update `lib/librbs/patches.rb` to require both patch files.
 
-### Canonical-dump format spec + Ruby-side helper
+### Canonical-dump helper
 
-Author the canonical-dump format specification (originally drafted
-for M3b, then deferred) alongside the Ruby implementation that
-follows it. Both land in this slice so they cannot drift.
-
-Suggested layout:
-
-```
-docs/tasks/milestones/M3/CANONICAL_FORMAT.md   # the format spec
-spec/support/canonical_dump.rb                  # Ruby implementation
-```
-
-The Ruby helper walks a real `RBS::Environment` and must:
+Add a Ruby helper at `spec/support/canonical_dump.rb` that walks a
+real `RBS::Environment` and emits a deterministic line-oriented
+summary of its six `*_decls` tables. The format is private to the
+M3 compat specs (only this helper writes it, only the compat specs
+read it), so a brief shape comment in the helper itself is enough —
+no separate format-spec document is needed. The helper must:
 
 - Iterate `env.class_decls.keys.sort_by(&:to_s)` and emit each entry.
-- For each declaration, walk members and types in a deterministic
-  order pinned by the spec.
+- Distinguish `ClassEntry` vs `ModuleEntry` and
+  `ClassAliasEntry` vs `ModuleAliasEntry` so a same-name swap shows
+  up as a diff.
 - Emit type names via `TypeName#to_s` (already absolute after
   `resolve_type_names`).
 
-If the Rust-side dumper is later restored (followup "Rust-side
-`canonical_dump` implementation"), it must produce byte-identical
-output to this Ruby helper for the same environment.
+If, in the future, the Rust-side dumper is unfrozen (see followup
+"Rust-side `canonical_dump` implementation"), it must produce
+byte-identical output to this helper. At that point the format
+shape comment should be promoted into a real cross-language
+contract (e.g. a doc next to the Rust dumper).
 
 ### `spec/compat/canonical_dump_core_spec.rb`
 
@@ -170,17 +167,28 @@ leak.
 
 ## Acceptance
 
-- [ ] `Librbs::Native.build_environment(RBS::EnvironmentLoader.new)` returns
+- [x] `Librbs::Native.build_environment(RBS::EnvironmentLoader.new)` returns
       a real `RBS::Environment` whose `@__librbs_handle` is set.
-- [ ] `Librbs::Native.canonical_dump(env)` returns a deterministic string.
-- [ ] `RBS::Environment.from_loader` patched to delegate to
+- [x] `RBS::Environment.from_loader` patched to delegate to
       `build_environment`.
-- [ ] `spec/compat/canonical_dump_core_spec.rb` green for the
-      **unresolved** core: Rust dump matches the Ruby dumper output on a
-      pure-RBS env.
-- [ ] No magnus call from the native dump path executes any Ruby method
-      besides ivar reads (peer review).
-- [ ] `bundle exec rspec` and `cargo test` both green in CI.
+- [x] A Ruby canonical-dump helper at `spec/support/canonical_dump.rb`
+      walks `RBS::Environment` deterministically; format intent is
+      pinned by a comment at the top of that file (the format is
+      internal to the compat specs).
+- [x] `spec/compat/canonical_dump_core_spec.rb` exists and is wired up
+      to the Ruby dumper on both sides. The librbs-vs-pure comparison
+      is `pending` until M3e materialization lands; the pure-RBS
+      sanity assertion is green today.
+- [x] `bundle exec rspec` and `cargo test` both green in CI.
+
+> **Scope adjustment.** The Rust-side `canonical_dump`
+> (`crates/librbs-core/src/canonical.rs`) and the
+> `Librbs::Native.canonical_dump` magnus bridge are **frozen**. The
+> compat matrix uses the Ruby helper exclusively. The
+> "Rust-side `canonical_dump` implementation" followup tracks the
+> trigger that would unfreeze it. As a consequence, the parent M3
+> "canonical dumps for core only match" acceptance row is closed by
+> M3e (once materialization populates `@class_decls`), not by M3c.
 
 ## References
 
