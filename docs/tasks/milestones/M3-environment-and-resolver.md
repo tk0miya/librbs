@@ -431,7 +431,7 @@ The CI job `compat-test` runs all of them.
 
 ## Acceptance
 
-- [ ] All `cargo test -p librbs-core` tests are green.
+- [x] All `cargo test -p librbs-core` tests are green.
 - [ ] Canonical dumps for core only match pure RBS exactly.
 - [ ] Canonical dumps for core + stdlib match pure RBS exactly.
 - [ ] The major-gems matrix is green.
@@ -452,11 +452,15 @@ The CI job `compat-test` runs all of them.
 ### Aligning canonical-dump format
 
 If the Rust dumper and Ruby dumper are written independently they will drift.
-**Define the format as a written specification first**, then implement both
-sides:
+**Define the format as a written specification** alongside the dumper
+implementation. The spec authored in M3c is the source of truth; if the
+Rust-side dumper is later restored (followup "Rust-side `canonical_dump`
+implementation"), it must follow the same spec byte-for-byte.
+
+Sketch of what the spec should pin down:
 
 ```
-# canonical-format spec (e.g. spec/compat/CANONICAL_FORMAT.md)
+# canonical-format spec (authored in M3c, alongside spec/support/canonical_dump.rb)
 - Lines separated by \n
 - Namespaced names emitted in fully qualified form (e.g. ::A::B)
 - Indentation: two spaces

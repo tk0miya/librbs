@@ -3,6 +3,8 @@
 //! Currently only the type-name resolver lives here; further resolvers
 //! land alongside it as later milestones port them.
 
+pub mod driver;
 pub mod type_name;
 
+pub use driver::resolve;
 pub use type_name::TypeNameResolver;

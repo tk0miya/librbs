@@ -6,7 +6,7 @@ use crate::env::entry::{
     DeclRef, GlobalEntry, InterfaceEntry, ModuleAliasEntry, ModuleEntry, TypeAliasEntry,
 };
 use crate::error::{Error, Result};
-use crate::interner::{NamespaceSym, Sym, TypeNameKind, TypeNameSym};
+use crate::interner::{NamespaceSym, Sym, TypeNameInterner, TypeNameKind, TypeNameSym};
 
 /// Walk one parsed signature and register its declarations into `env`.
 pub fn insert_rbs_source(
@@ -15,10 +15,14 @@ pub fn insert_rbs_source(
     signature: &SignatureNode<'_>,
 ) -> Result<()> {
     let mut counter: u32 = 0;
-    let empty_ns = env.interner.namespaces.empty_relative();
+    // Mirrors `prefix: Namespace.root` in `RBS::Environment#resolve_signature`
+    // (vendor/rbs/lib/rbs/environment.rb:515) — top-level decls are
+    // anchored at the absolute root, so every entry's name is rendered
+    // as `::Foo`, `::Foo::Bar`, etc. when stringified.
+    let root = env.interner.namespaces.root_absolute();
     let context: Context = Vec::new();
     for decl in signature.declarations().iter() {
-        insert_decl(env, source_index, &mut counter, &decl, &context, empty_ns)?;
+        insert_decl(env, source_index, &mut counter, &decl, &context, root)?;
     }
     Ok(())
 }
@@ -32,20 +36,28 @@ fn assign_decl_index(counter: &mut u32, source_index: u32) -> DeclRef {
     }
 }
 
-fn intern_type_name(env: &mut Environment, node: &TypeNameNode<'_>) -> TypeNameSym {
+/// Convert a parsed `TypeNameNode` into a [`TypeNameSym`] by interning
+/// every segment and the leaf name through `interner`. Both the M2
+/// insert pass (entry registration) and the M3b resolver driver
+/// (recording type-name occurrences) need to perform exactly this
+/// translation, so the shared definition lives here.
+pub(crate) fn intern_type_name_node(
+    interner: &mut TypeNameInterner,
+    node: &TypeNameNode<'_>,
+) -> TypeNameSym {
     let ns_node = node.namespace();
     let absolute = ns_node.absolute();
     let mut path: Vec<Sym> = Vec::new();
     for seg in ns_node.path().iter() {
         if let Node::Symbol(sym) = seg {
-            path.push(env.interner.symbols.intern(sym.as_str()));
+            path.push(interner.symbols.intern(sym.as_str()));
         }
     }
-    let name_sym_node = node.name();
-    let name = env.interner.symbols.intern(name_sym_node.as_str());
-    let ns = env.interner.namespaces.intern(&path, absolute);
-    let kind = TypeNameKind::detect(name_sym_node.as_str());
-    env.interner.intern(ns, name, kind)
+    let name_node = node.name();
+    let name = interner.symbols.intern(name_node.as_str());
+    let ns = interner.namespaces.intern(&path, absolute);
+    let kind = TypeNameKind::detect(name_node.as_str());
+    interner.intern(ns, name, kind)
 }
 
 fn insert_decl(
@@ -60,7 +72,7 @@ fn insert_decl(
 
     match decl {
         Node::Class(c) => {
-            let inner = intern_type_name(env, &c.name());
+            let inner = intern_type_name_node(&mut env.interner, &c.name());
             let name = env.interner.with_prefix(namespace, inner);
             check_constant_collision(env, name)?;
             let existing = env.class_decls.get(&name);
@@ -92,7 +104,7 @@ fn insert_decl(
             }
         }
         Node::Module(m) => {
-            let inner = intern_type_name(env, &m.name());
+            let inner = intern_type_name_node(&mut env.interner, &m.name());
             let name = env.interner.with_prefix(namespace, inner);
             check_constant_collision(env, name)?;
             let existing = env.class_decls.get(&name);
@@ -124,7 +136,7 @@ fn insert_decl(
             }
         }
         Node::Interface(i) => {
-            let inner = intern_type_name(env, &i.name());
+            let inner = intern_type_name_node(&mut env.interner, &i.name());
             let name = env.interner.with_prefix(namespace, inner);
             if env.interface_decls.contains_key(&name) {
                 return Err(Error::DuplicatedDeclaration {
@@ -141,7 +153,7 @@ fn insert_decl(
             );
         }
         Node::TypeAlias(a) => {
-            let inner = intern_type_name(env, &a.name());
+            let inner = intern_type_name_node(&mut env.interner, &a.name());
             let name = env.interner.with_prefix(namespace, inner);
             if env.type_alias_decls.contains_key(&name) {
                 return Err(Error::DuplicatedDeclaration {
@@ -158,7 +170,7 @@ fn insert_decl(
             );
         }
         Node::Constant(c) => {
-            let inner = intern_type_name(env, &c.name());
+            let inner = intern_type_name_node(&mut env.interner, &c.name());
             let name = env.interner.with_prefix(namespace, inner);
             check_constant_collision(env, name)?;
             if env.class_decls.contains_key(&name) {
@@ -193,9 +205,9 @@ fn insert_decl(
             );
         }
         Node::ClassAlias(ca) => {
-            let inner = intern_type_name(env, &ca.new_name());
+            let inner = intern_type_name_node(&mut env.interner, &ca.new_name());
             let name = env.interner.with_prefix(namespace, inner);
-            let old_name = intern_type_name(env, &ca.old_name());
+            let old_name = intern_type_name_node(&mut env.interner, &ca.old_name());
             check_constant_collision(env, name)?;
             if env.class_decls.contains_key(&name) {
                 return Err(Error::DuplicatedDeclaration {
@@ -213,9 +225,9 @@ fn insert_decl(
             );
         }
         Node::ModuleAlias(ma) => {
-            let inner = intern_type_name(env, &ma.new_name());
+            let inner = intern_type_name_node(&mut env.interner, &ma.new_name());
             let name = env.interner.with_prefix(namespace, inner);
-            let old_name = intern_type_name(env, &ma.old_name());
+            let old_name = intern_type_name_node(&mut env.interner, &ma.old_name());
             check_constant_collision(env, name)?;
             if env.class_decls.contains_key(&name) {
                 return Err(Error::DuplicatedDeclaration {
@@ -240,7 +252,15 @@ fn insert_decl(
     Ok(())
 }
 
-fn is_decl_node(n: &Node<'_>) -> bool {
+/// Predicate over [`Node`] variants that env entries are built from.
+///
+/// The eight kinds enumerated below are the canonical "what counts as a
+/// top-level declaration" list. `env::insert` registers them as entries
+/// in the six `*_decls` hashes; `resolver::driver` recurses through the
+/// same set when traversing class/module bodies; `canonical` emits one
+/// fragment per such node. Keeping the three modules in lock-step
+/// requires a single definition, which is here.
+pub(crate) fn is_decl_node(n: &Node<'_>) -> bool {
     matches!(
         n,
         Node::Class(_)

@@ -41,9 +41,10 @@ subprocess prints the canonical dump to stdout; the parent compares.
 ### `spec/support/canonical_dump.rb`
 
 Audit and finalize the Ruby-side dumper — every divergence found while
-running the matrix becomes a fix in this file (or in the Rust dumper, or
-in both, but always so that they stay in lockstep with
-`CANONICAL_FORMAT.md`).
+running the matrix becomes a fix in this file (or in the Rust dumper if
+the followup "Rust-side `canonical_dump` implementation" has been
+applied, or in both, but always so that they stay in lockstep with the
+canonical-dump format spec authored in M3c).
 
 ### Patch hardening
 

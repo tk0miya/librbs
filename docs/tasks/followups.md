@@ -119,6 +119,89 @@ belong in this list.
   Don't do it as a standalone PR before then — the change is mechanical
   but touches enough sites to be noisy in review.
 
+### Rust-side `canonical_dump` implementation
+
+- **Origin**: M3b review.
+- **Where**: `crates/librbs-core/src/canonical.rs` (deleted at the end
+  of M3b). The canonical-dump format spec lives in M3c, alongside the
+  Ruby-side dumper that consumes it.
+- **What**: M3b initially shipped a Rust-side `canonical_dump` so the
+  M3 lazy-boundary contract held even during compatibility tests
+  (Ruby-side dumping would force materialization). On review we
+  decided the simpler path is to defer the Rust dumper and let M3c's
+  Ruby-side `canonical_dump` walk the materialized env, accepting
+  that compatibility runs trigger materialization. The Rust file and
+  its standalone format-spec doc were removed; M3c rebuilds the spec
+  as part of writing the Ruby dumper.
+- **Trigger**: If the Ruby-side `canonical_dump` becomes too slow on
+  the core / core+stdlib / gems compatibility matrix to be practical
+  in CI, port the dumper back to Rust and call it across the magnus
+  boundary so the dump runs without materializing.
+- **Required changes** (when triggered):
+  - Restore `crates/librbs-core/src/canonical.rs` from
+    `git show 0d449d6:crates/librbs-core/src/canonical.rs` (the
+    initial M3b implementation) or the dedup'd version in
+    `b313b1c`.
+  - Re-export it via `pub mod canonical;` in `lib.rs`.
+  - Re-add the snapshot fixtures from the M3b version of
+    `tests/resolution.rs` (`canonical_dump_simple_fixture_is_stable`
+    et al.) so the format does not drift silently.
+  - Bridge through magnus (`Librbs::Native.canonical_dump`) so M3c+
+    compatibility specs can call the Rust dumper instead of the
+    Ruby helper.
+- **When**: Only when the Ruby-side dumper's wall-clock time on the
+  full compatibility matrix becomes a CI bottleneck. Don't pre-empt
+  it.
+
+### Wildcard `_ =>` arms in `resolver/driver.rs` defeat exhaustiveness
+
+- **Origin**: M3b review.
+- **Where**: `crates/librbs-core/src/resolver/driver.rs` — five `match`
+  expressions on `ruby_rbs::node::Node` end with `_ => {}`:
+  - `apply_use_directive` (use-clause dispatch)
+  - `walk_declaration` (top-level decl dispatch)
+  - `walk_member` (class/module/interface member dispatch)
+  - `walk_type` (type-expression dispatch) ← highest risk
+  - `walk_decl_index` (DeclRef lookup helper)
+- **What**: The `Node` enum has 77 variants today, generated from
+  `vendor/rbs/config.yml`. A `_ =>` arm silently swallows any variant
+  the explicit cases don't list. If a future `ruby-rbs` release adds a
+  new variant — most plausibly a new `RBS::Types::*` (which would land
+  in `walk_type`) or a new `RBS::AST::Members::*` (which would land in
+  `walk_member`) — our walk would skip it without recording any
+  resolution. The miss surfaces only via `canonical-dump` byte
+  divergence in the M3c+ compatibility tests, which is exactly the
+  kind of "diff failure with no obvious cause" the M3 design tries to
+  avoid.
+- **Required changes** — apply per call site, in order of risk:
+  - `walk_type`: replace `_ => {}` with an exhaustive match. List the
+    25 type variants on the positive side; group the remaining ~50
+    non-type variants into a single `Node::Class(_) | Node::Module(_)
+    | ... => unreachable!("walk_type called on non-type node")` arm so
+    the compiler enforces exhaustiveness and any future `ruby-rbs`
+    bump that adds a variant fails to build. Same treatment for
+    `walk_member`.
+  - `apply_use_directive`: 2 valid clause kinds; change `_ => {}` to
+    `_ => unreachable!("unknown use clause from C parser")` to surface
+    parser changes immediately.
+  - `walk_declaration`: callers gate on `is_decl_node` first, so the
+    risk is lower; either keep `_ => {}` with a `debug_assert!` or
+    promote to `unreachable!`.
+  - `walk_decl_index`: catches the six member-less decl kinds
+    intentionally; replace with explicit list (`Interface | TypeAlias
+    | Constant | Global | ClassAlias | ModuleAlias => {}`) so the
+    intent is visible.
+  - Apply the same treatment to `canonical.rs::render_type` /
+    `dump_member` / `dump_declaration`, which mirror these dispatches.
+- **When**: Reactively, not as a prerequisite for any milestone.
+  Trigger when (a) a `ruby-rbs` version bump introduces new `Node`
+  variants, or (b) a canonical-dump compatibility diff surfaces with
+  no obvious cause and a missed variant becomes a suspect.
+- **Tests**: A meta-test that asserts the union of variants matched
+  positively in each `walk_*` covers exactly the relevant slice of
+  the enum is hard to write directly in Rust; the exhaustive match
+  itself is the test. No additional fixture needed.
+
 ### Byte ↔ character offset bridge for `RBS::Location`
 
 - **Origin**: M2 review of `Buffer`.
