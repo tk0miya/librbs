@@ -1,17 +1,21 @@
-# M3c: Native `build_environment` + `canonical_dump` and core compat spec
+# M3c: Native `build_environment` + canonical-dump format and core compat spec
 
 ## Goal
 
 Cross the magnus boundary for the first time in M3. Expose
-`build_environment` and `canonical_dump` to Ruby, write the Ruby-side
-`canonical_dump` helper that mirrors the Rust format, and lock in the first
-acceptance checkbox: **canonical dump for core only matches pure RBS**.
+`build_environment` to Ruby, write the canonical-dump format spec
+*and* the Ruby-side `canonical_dump` helper that implements it, and
+lock in the first acceptance checkbox: **canonical dump for core only
+matches pure RBS**.
+
+The canonical-dump format spec was originally drafted in M3b. It has
+been moved here so spec and the implementation that follows it land
+together; see the followup "Rust-side `canonical_dump`
+implementation" for the deferred Rust port.
 
 ## Prerequisites
 
 - M3a + M3b merged.
-- The format spec `docs/tasks/milestones/M3/CANONICAL_FORMAT.md` from M3b
-  is the source of truth for both dumpers.
 - Read [../M3-environment-and-resolver.md](../M3-environment-and-resolver.md)
   sections "Native API", "Patch layer" (only the `from_loader` portion is
   relevant in this slice), and "Pitfalls / Injecting ivars into Ruby
@@ -104,23 +108,30 @@ that's M3d.
 
 Update `lib/librbs/patches.rb` to require both patch files.
 
-### Ruby-side `canonical_dump` helper
+### Canonical-dump format spec + Ruby-side helper
+
+Author the canonical-dump format specification (originally drafted
+for M3b, then deferred) alongside the Ruby implementation that
+follows it. Both land in this slice so they cannot drift.
+
+Suggested layout:
 
 ```
-spec/support/canonical_dump.rb
+docs/tasks/milestones/M3/CANONICAL_FORMAT.md   # the format spec
+spec/support/canonical_dump.rb                  # Ruby implementation
 ```
 
-Implements the same format defined in `CANONICAL_FORMAT.md` against a real
-`RBS::Environment`. It must:
+The Ruby helper walks a real `RBS::Environment` and must:
 
 - Iterate `env.class_decls.keys.sort_by(&:to_s)` and emit each entry.
-- For each declaration, walk members and types in the same order as the
-  Rust dumper.
+- For each declaration, walk members and types in a deterministic
+  order pinned by the spec.
 - Emit type names via `TypeName#to_s` (already absolute after
   `resolve_type_names`).
 
-Both dumpers ultimately produce the same UTF-8 string for the same
-environment.
+If the Rust-side dumper is later restored (followup "Rust-side
+`canonical_dump` implementation"), it must produce byte-identical
+output to this Ruby helper for the same environment.
 
 ### `spec/compat/canonical_dump_core_spec.rb`
 

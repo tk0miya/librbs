@@ -1,14 +1,20 @@
-# M3b: Resolution driver and Rust-side canonical dump
+# M3b: Resolution driver
 
 ## Goal
 
-Walk every parsed source's AST, record a `ResolvedRef` for each type-name
-occurrence into the `Resolution` side-table, and emit a deterministic
-canonical dump string entirely from Rust. Still no magnus boundary work.
+Walk every parsed source's AST and record a `ResolvedRef` for each
+type-name occurrence into the `Resolution` side-table. Still no magnus
+boundary work.
 
-This is the largest slice of M3 by line count: the AST traversal must cover
-every node-type branch in `vendor/rbs/lib/rbs/environment.rb:577-980`. Missing
-even one variant will surface later as a canonical-dump diff failure.
+The AST traversal must cover every node-type branch in
+`vendor/rbs/lib/rbs/environment.rb:577-980`. Missing even one variant
+will surface later as a canonical-dump diff failure once M3c starts
+running compatibility checks.
+
+The canonical-dump format spec and Rust-side dumper were originally
+part of this slice; both moved to M3c so the spec lives next to its
+implementation. See the followup "Rust-side `canonical_dump`
+implementation" for the eventual Rust port.
 
 ## Prerequisites
 
@@ -73,36 +79,15 @@ Mirror these Ruby methods one-for-one. Each gets a Rust `walk_*` function:
 For each branch, write a comment quoting the corresponding Ruby line range,
 e.g. `// environment.rb:612-618`.
 
-### `crates/librbs-core/src/canonical.rs`
+### Canonical dump (deferred to M3c)
 
-Define the canonical dump format **as a written specification first**, then
-implement against it. Recommended layout:
-
-```
-# docs/tasks/milestones/M3/CANONICAL_FORMAT.md   <- new file in this slice
-- UTF-8, lines separated by \n
-- Top-level entries sorted by TypeName.to_s
-- Two-space indentation, no tabs
-- Type names always emitted in fully qualified form (::A::B)
-- Resolved names use the resolution table; unresolved fall back to original
-- Method overload order preserved
-- Comments and locations excluded
-- ...
-```
-
-Then implement `pub fn canonical_dump(env: &Environment, resolution: Option<&Resolution>) -> String`:
-
-- Iterate each of the six entry hashes in TypeName order.
-- For each entry, emit declarations in the same order as Ruby's
-  `each_decl`.
-- Within each declaration, walk the AST in the same order as Ruby's
-  canonical dumper (defined alongside in M3c, but spec it here).
-- For type-name occurrences, look up the `NodeId` in the resolution table:
-  - `Resolved(sym)` → emit fully qualified absolute name
-  - `Unresolved(sym)` → emit the original name as-is
-  - missing entry → emit original name (env not yet resolved)
-
-The format spec doc must be written before the implementation lands.
+The canonical-dump format spec and the dumper that walks it have been
+moved to M3c so the spec lives next to its implementation. M3b only
+ensures the resolution side-table contains everything the dumper will
+need (per-occurrence `Resolved` / `Unresolved` records, plus
+round-trippable `DeclRef`s). See the followup "Rust-side
+`canonical_dump` implementation" if/when a Rust port becomes
+necessary as a CI optimization.
 
 ### Tests
 
@@ -110,7 +95,6 @@ The format spec doc must be written before the implementation lands.
   - Build a fixture environment from a small RBS string (or reuse the
     discovery harness on a temp dir).
   - Assert specific `NodeId → ResolvedRef` entries.
-  - Assert canonical dump output for a few hand-written cases.
 - Round-trip test for the M2 followup
   "DeclRef indexing consistency between insert and lookup": the driver is
   the first reader of `DeclRef`, so add a test that for every entry,
@@ -119,25 +103,30 @@ The format spec doc must be written before the implementation lands.
 ## Out of scope (deferred)
 
 - magnus boundary — M3c.
-- Ruby-side canonical dump helper — M3c (the format spec written here is
-  what M3c implements against on the Ruby side).
+- Canonical-dump format spec and Ruby-side dumper — M3c (spec and
+  implementation kept together to avoid drift).
+- Rust-side canonical dumper — followup "Rust-side `canonical_dump`
+  implementation"; revisited only if the Ruby dumper becomes a CI
+  bottleneck.
 - Materialization — M3e.
 
 ## Acceptance
 
-- [ ] `crates/librbs-core/src/canonical.rs` exists and produces deterministic
-      output for two stable fixture environments (snapshot tested).
-- [ ] AST traversal covers every variant of `RBS::AST::Members::*`,
+- [x] AST traversal covers every variant of `RBS::AST::Members::*`,
       `RBS::AST::Declarations::*`, `RBS::AST::TypeParam`,
       `RBS::MethodType`, and `RBS::Types::*` referenced in the upstream
       `resolve_*` family. Reviewers spot-check that each Rust branch has a
       Ruby line-range comment.
-- [ ] `# resolve-type-names: false` short-circuits resolution for the
+- [x] `# resolve-type-names: false` short-circuits resolution for the
       source — covered by a unit test.
-- [ ] Format spec at `docs/tasks/milestones/M3/CANONICAL_FORMAT.md` is
-      written and matches the implementation.
-- [ ] `DeclRef` round-trip test in place.
-- [ ] `cargo test -p librbs-core` green.
+- [x] `DeclRef` round-trip test in place.
+- [x] `cargo test -p librbs-core` green.
+
+The canonical-dump format spec was originally part of M3b's scope but
+has been moved to M3c, where the dumper itself lives — keeping spec
+and implementation in the same slice avoids drift. See the followup
+"Rust-side `canonical_dump` implementation" for the deferred Rust
+port.
 
 ## References
 
