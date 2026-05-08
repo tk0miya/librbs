@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod env;
 pub mod error;
 pub mod interner;
+pub mod resolver;
 pub mod source;
 
 pub use discovery::{Loader, Repository, SourceTag};

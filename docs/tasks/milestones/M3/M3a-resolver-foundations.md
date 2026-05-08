@@ -123,19 +123,19 @@ makes the dependency direct.)
 
 ## Acceptance
 
-- [ ] `cargo test -p librbs-core` green.
-- [ ] New unit tests under `crates/librbs-core/src/resolver/type_name.rs`
+- [x] `cargo test -p librbs-core` green.
+- [x] New unit tests under `crates/librbs-core/src/resolver/type_name.rs`
       cover at minimum:
   - resolve absolute, already-known name (returns input as-is)
   - resolve unqualified name in nested context (walks outer)
   - resolve through a class alias (`aliases` lookup)
   - alias cycle detection (`visited` guard returns `false` cleanly)
   - resolve fails → returns `None`
-- [ ] New unit tests for `UseMap`:
+- [x] New unit tests for `UseMap`:
   - direct rename clause maps `Sym → TypeNameSym`
   - child lookup via `Table::children`
-- [ ] No magnus / `ext/librbs` changes in this slice.
-- [ ] Followup "DeclRef indexing consistency" remains open — this slice
+- [x] No magnus / `ext/librbs` changes in this slice.
+- [x] Followup "DeclRef indexing consistency" remains open — this slice
       doesn't introduce a `DeclRef` reader yet.
 
 ## References
