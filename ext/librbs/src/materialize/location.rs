@@ -32,11 +32,6 @@ pub fn make_location(
 /// Append a required sub-location at `name` for `range`. Mirrors
 /// `RBS::Location#add_required_child(name, range)` from
 /// `vendor/rbs/lib/rbs/location_aux.rb`.
-///
-/// `#[allow(dead_code)]` because M3e ships only the plumbing — the
-/// per-node materialization in M3f / M3g / M3h is what actually wires
-/// sub-locations on each `RBS::Location`.
-#[allow(dead_code)]
 pub fn add_required_child(
     ctx: &MaterializeCtx<'_>,
     loc: Value,
@@ -54,7 +49,6 @@ pub fn add_required_child(
 /// Append an optional sub-location at `name`. When `range` is `None`
 /// the upstream method is called with `nil`, mirroring
 /// `RBS::Location#add_optional_child(name, nil)`.
-#[allow(dead_code)]
 pub fn add_optional_child(
     ctx: &MaterializeCtx<'_>,
     loc: Value,

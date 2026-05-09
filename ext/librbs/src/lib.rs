@@ -488,6 +488,236 @@ mod m3e_test_entries {
         });
         materialize::type_name::materialize_resolved_type_name(&mut ctx, raw)
     }
+
+    /// `Librbs::Native._materialize_first_type_alias_target(env)`. Walks
+    /// to the first declaration of the first source — which must be a
+    /// `type t = ...` alias — and returns the materialized
+    /// `RBS::Types::*` instance for the alias's target. Compared to
+    /// `RBS::Parser.parse_type` byte-for-byte in
+    /// `spec/unit/materialize_type_spec.rb`.
+    pub(super) fn materialize_first_type_alias_target(env_ruby: Value) -> Result<Value, Error> {
+        let ruby = Ruby::get().expect("Ruby thread");
+        let (_handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+        let env: &librbs_core::Environment = unsafe { &*env_ptr };
+        let source = env
+            .sources
+            .first()
+            .ok_or_else(|| rb_runtime_err("env has no sources"))?;
+        let first_decl = source
+            .parser
+            .signature()
+            .declarations()
+            .iter()
+            .next()
+            .ok_or_else(|| rb_runtime_err("source has no declarations"))?;
+        let Node::TypeAlias(alias) = &first_decl else {
+            return Err(rb_runtime_err("first decl is not a type alias"));
+        };
+        let target = alias.type_();
+        let resolution_ptr = unsafe { read_resolution_ptr(env_ruby)? };
+        let resolution: Option<&Resolution> = resolution_ptr.map(|p| unsafe { &*p });
+        let classes = ClassRefs::resolve(&ruby)?;
+        let mut ctx = MaterializeCtx::new(&ruby, env, resolution, 0, classes);
+        ctx.enter_decl(librbs_core::env::entry::DeclRef {
+            source_index: 0,
+            decl_index: 0,
+        });
+        materialize::type_::materialize_type(&mut ctx, &target)
+    }
+
+    /// `Librbs::Native._materialize_first_method_type_params(env)`.
+    /// Walks the first class/module/interface declaration in source 0
+    /// to its first `def`'s first overload, then materializes that
+    /// `MethodType`'s `type_params` list as an `Array<RBS::AST::TypeParam>`.
+    /// Compared against `RBS::Parser.parse_method_type` JSON in
+    /// `spec/unit/materialize_type_param_spec.rb`.
+    pub(super) fn materialize_first_method_type_params(env_ruby: Value) -> Result<Value, Error> {
+        use ruby_rbs::node::{MethodTypeNode, TypeParamNode};
+
+        let ruby = Ruby::get().expect("Ruby thread");
+        let (_handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+        let env: &librbs_core::Environment = unsafe { &*env_ptr };
+        let source = env
+            .sources
+            .first()
+            .ok_or_else(|| rb_runtime_err("env has no sources"))?;
+        // Walk top-level decls in source order, picking the first
+        // class/module/interface that owns a method definition. The
+        // `decl_counter` mirrors `resolver::driver`'s pre-order
+        // increment so that the resulting `decl_index` is the same
+        // one M3b's resolver associated the decl's resolution slice
+        // with — required for the cursor lookup to find any nested
+        // type-name occurrences.
+        fn count_subtree(node: &Node<'_>) -> u32 {
+            // 1 for `node` itself + recursive count of nested decls.
+            let mut c = 1;
+            let members = match node {
+                Node::Class(cl) => Some(cl.members()),
+                Node::Module(m) => Some(m.members()),
+                _ => None,
+            };
+            if let Some(members) = members {
+                for m in members.iter() {
+                    // Inlined `is_decl_node`: only Class / Module /
+                    // Interface / TypeAlias / Constant / Global /
+                    // ClassAlias / ModuleAlias produce DeclRefs in
+                    // `env::insert::insert_decl`. Mirroring that list
+                    // here keeps `decl_counter` aligned with the
+                    // resolver driver's pre-order numbering without
+                    // widening `is_decl_node`'s public surface for a
+                    // helper that's removed at M3h.
+                    if matches!(
+                        &m,
+                        Node::Class(_)
+                            | Node::Module(_)
+                            | Node::Interface(_)
+                            | Node::TypeAlias(_)
+                            | Node::Constant(_)
+                            | Node::Global(_)
+                            | Node::ClassAlias(_)
+                            | Node::ModuleAlias(_)
+                    ) {
+                        c += count_subtree(&m);
+                    }
+                }
+            }
+            c
+        }
+        let mut decl_counter: u32 = 0;
+        let mut found = None;
+        for decl in source.parser.signature().declarations().iter() {
+            let members = match &decl {
+                Node::Class(c) => Some(c.members()),
+                Node::Module(m) => Some(m.members()),
+                Node::Interface(i) => Some(i.members()),
+                _ => None,
+            };
+            if let Some(members) = members
+                && let Some(md) = members
+                    .iter()
+                    .find(|m| matches!(m, Node::MethodDefinition(_)))
+            {
+                found = Some((decl_counter, md));
+                break;
+            }
+            decl_counter += count_subtree(&decl);
+        }
+        let (decl_index, method_def) =
+            found.ok_or_else(|| rb_runtime_err("no method definition found in source"))?;
+        let Node::MethodDefinition(md) = &method_def else {
+            unreachable!();
+        };
+        let first_overload = md
+            .overloads()
+            .iter()
+            .next()
+            .ok_or_else(|| rb_runtime_err("method has no overloads"))?;
+        let Node::MethodDefinitionOverload(overload) = &first_overload else {
+            return Err(rb_runtime_err("overload node has unexpected variant"));
+        };
+        let mt_node = overload.method_type();
+        let Node::MethodType(method_type) = &mt_node else {
+            return Err(rb_runtime_err("overload's method_type is not a MethodType"));
+        };
+        // Borrow params as a typed handle so the iterator's lifetime
+        // outlives the temporary `&MethodTypeNode`.
+        let mt: &MethodTypeNode<'_> = method_type;
+        let params = mt.type_params();
+
+        let resolution_ptr = unsafe { read_resolution_ptr(env_ruby)? };
+        let resolution: Option<&Resolution> = resolution_ptr.map(|p| unsafe { &*p });
+        let classes = ClassRefs::resolve(&ruby)?;
+        let mut ctx = MaterializeCtx::new(&ruby, env, resolution, 0, classes);
+        ctx.enter_decl(librbs_core::env::entry::DeclRef {
+            source_index: 0,
+            decl_index,
+        });
+        let arr = ruby.ary_new();
+        for p in params.iter() {
+            let Node::TypeParam(tp) = &p else {
+                return Err(rb_runtime_err(
+                    "type_params list contains non-TypeParam node",
+                ));
+            };
+            let tp: &TypeParamNode<'_> = tp;
+            arr.push(materialize::type_param::materialize_type_param(
+                &mut ctx, tp,
+            )?)?;
+        }
+        // Mirror the C parser's call to `RBS::AST::TypeParam.resolve_variables(type_params)`
+        // so a TypeParam whose upper_bound mentions another TypeParam by
+        // name (e.g. `[X < _Each[Y], Y]`) gets its inner Variable types
+        // rewritten — required for byte-equivalence with
+        // `RBS::Parser.parse_method_type`.
+        let _: Value = ctx
+            .classes
+            .type_param
+            .funcall("resolve_variables", (arr,))?;
+        Ok(arr.as_value())
+    }
+
+    /// `Librbs::Native._materialize_first_class_type_params(env)`. Walks
+    /// to the first class/module/interface/type-alias declaration in
+    /// source 0 and materializes its declaration-level `type_params`
+    /// list. Used by the M3f type_param spec to exercise variance and
+    /// `unchecked` modifiers, both of which are only legal at the
+    /// declaration level. Removed at M3h alongside the other
+    /// `_materialize_*` entries.
+    pub(super) fn materialize_first_class_type_params(env_ruby: Value) -> Result<Value, Error> {
+        use ruby_rbs::node::TypeParamNode;
+
+        let ruby = Ruby::get().expect("Ruby thread");
+        let (_handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+        let env: &librbs_core::Environment = unsafe { &*env_ptr };
+        let source = env
+            .sources
+            .first()
+            .ok_or_else(|| rb_runtime_err("env has no sources"))?;
+        let first_decl = source
+            .parser
+            .signature()
+            .declarations()
+            .iter()
+            .next()
+            .ok_or_else(|| rb_runtime_err("source has no declarations"))?;
+        let params = match &first_decl {
+            Node::Class(c) => c.type_params(),
+            Node::Module(m) => m.type_params(),
+            Node::Interface(i) => i.type_params(),
+            Node::TypeAlias(a) => a.type_params(),
+            _ => {
+                return Err(rb_runtime_err(
+                    "first decl has no declaration-level type_params",
+                ));
+            }
+        };
+
+        let resolution_ptr = unsafe { read_resolution_ptr(env_ruby)? };
+        let resolution: Option<&Resolution> = resolution_ptr.map(|p| unsafe { &*p });
+        let classes = ClassRefs::resolve(&ruby)?;
+        let mut ctx = MaterializeCtx::new(&ruby, env, resolution, 0, classes);
+        ctx.enter_decl(librbs_core::env::entry::DeclRef {
+            source_index: 0,
+            decl_index: 0,
+        });
+        let arr = ruby.ary_new();
+        for p in params.iter() {
+            let Node::TypeParam(tp) = &p else {
+                return Err(rb_runtime_err(
+                    "type_params list contains non-TypeParam node",
+                ));
+            };
+            let tp: &TypeParamNode<'_> = tp;
+            arr.push(materialize::type_param::materialize_type_param(
+                &mut ctx, tp,
+            )?)?;
+        }
+        let _: Value = ctx
+            .classes
+            .type_param
+            .funcall("resolve_variables", (arr,))?;
+        Ok(arr.as_value())
+    }
 }
 // =====================================================================
 // End of M3e temporary test-entry harness
@@ -581,6 +811,18 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.define_singleton_method(
         "_materialize_first_super_name",
         function!(m3e_test_entries::materialize_first_super_name, 1),
+    )?;
+    module.define_singleton_method(
+        "_materialize_first_type_alias_target",
+        function!(m3e_test_entries::materialize_first_type_alias_target, 1),
+    )?;
+    module.define_singleton_method(
+        "_materialize_first_method_type_params",
+        function!(m3e_test_entries::materialize_first_method_type_params, 1),
+    )?;
+    module.define_singleton_method(
+        "_materialize_first_class_type_params",
+        function!(m3e_test_entries::materialize_first_class_type_params, 1),
     )?;
 
     Ok(())

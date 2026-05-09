@@ -109,12 +109,12 @@ returns the materialized Ruby object. Removed at M3h.
 
 ## Acceptance
 
-- [ ] Every type variant in the table has a unit test that passes
+- [x] Every type variant in the table has a unit test that passes
       against `RBS::Parser.parse_type` JSON output.
-- [ ] `materialize/type_.rs` matches `walk_type` exhaustively (no
+- [x] `materialize/type_.rs` matches `walk_type` exhaustively (no
       wildcard fallthroughs).
-- [ ] Resolution lookup behaves correctly for the three states.
-- [ ] M3a–M3e specs remain green; canonical-dump compat still
+- [x] Resolution lookup behaves correctly for the three states.
+- [x] M3a–M3e specs remain green; canonical-dump compat still
       `pending` (unblocked at M3h).
 
 ## References

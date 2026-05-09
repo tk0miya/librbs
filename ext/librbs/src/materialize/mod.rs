@@ -16,7 +16,9 @@ use librbs_core::env::entry::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
 
 pub mod location;
+pub mod type_;
 pub mod type_name;
+pub mod type_param;
 
 /// Pre-resolved Ruby class refs used during materialization. Looking
 /// these up once per [`MaterializeCtx`] avoids per-node `ruby.eval`s on
@@ -29,6 +31,32 @@ pub struct ClassRefs {
     pub buffer: RClass,
     pub location: RClass,
     pub pathname: RClass,
+    pub type_param: RClass,
+    pub types_bases_bool: RClass,
+    pub types_bases_void: RClass,
+    pub types_bases_any: RClass,
+    pub types_bases_nil: RClass,
+    pub types_bases_top: RClass,
+    pub types_bases_bottom: RClass,
+    pub types_bases_self: RClass,
+    pub types_bases_instance: RClass,
+    pub types_bases_class: RClass,
+    pub types_variable: RClass,
+    pub types_literal: RClass,
+    pub types_class_instance: RClass,
+    pub types_interface: RClass,
+    pub types_alias: RClass,
+    pub types_class_singleton: RClass,
+    pub types_tuple: RClass,
+    pub types_union: RClass,
+    pub types_intersection: RClass,
+    pub types_record: RClass,
+    pub types_optional: RClass,
+    pub types_proc: RClass,
+    pub types_block: RClass,
+    pub types_function: RClass,
+    pub types_function_param: RClass,
+    pub types_untyped_function: RClass,
 }
 
 impl ClassRefs {
@@ -39,6 +67,32 @@ impl ClassRefs {
             buffer: ruby.eval("RBS::Buffer")?,
             location: ruby.eval("RBS::Location")?,
             pathname: ruby.eval("Pathname")?,
+            type_param: ruby.eval("RBS::AST::TypeParam")?,
+            types_bases_bool: ruby.eval("RBS::Types::Bases::Bool")?,
+            types_bases_void: ruby.eval("RBS::Types::Bases::Void")?,
+            types_bases_any: ruby.eval("RBS::Types::Bases::Any")?,
+            types_bases_nil: ruby.eval("RBS::Types::Bases::Nil")?,
+            types_bases_top: ruby.eval("RBS::Types::Bases::Top")?,
+            types_bases_bottom: ruby.eval("RBS::Types::Bases::Bottom")?,
+            types_bases_self: ruby.eval("RBS::Types::Bases::Self")?,
+            types_bases_instance: ruby.eval("RBS::Types::Bases::Instance")?,
+            types_bases_class: ruby.eval("RBS::Types::Bases::Class")?,
+            types_variable: ruby.eval("RBS::Types::Variable")?,
+            types_literal: ruby.eval("RBS::Types::Literal")?,
+            types_class_instance: ruby.eval("RBS::Types::ClassInstance")?,
+            types_interface: ruby.eval("RBS::Types::Interface")?,
+            types_alias: ruby.eval("RBS::Types::Alias")?,
+            types_class_singleton: ruby.eval("RBS::Types::ClassSingleton")?,
+            types_tuple: ruby.eval("RBS::Types::Tuple")?,
+            types_union: ruby.eval("RBS::Types::Union")?,
+            types_intersection: ruby.eval("RBS::Types::Intersection")?,
+            types_record: ruby.eval("RBS::Types::Record")?,
+            types_optional: ruby.eval("RBS::Types::Optional")?,
+            types_proc: ruby.eval("RBS::Types::Proc")?,
+            types_block: ruby.eval("RBS::Types::Block")?,
+            types_function: ruby.eval("RBS::Types::Function")?,
+            types_function_param: ruby.eval("RBS::Types::Function::Param")?,
+            types_untyped_function: ruby.eval("RBS::Types::UntypedFunction")?,
         })
     }
 }
