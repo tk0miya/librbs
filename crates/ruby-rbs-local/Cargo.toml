@@ -1,0 +1,20 @@
+[package]
+name = "ruby-rbs"
+version = "0.3.0"
+edition = "2024"
+license = "BSD-2-Clause"
+description = "Rust bindings for RBS -- the type signature language for Ruby programs"
+homepage = "https://github.com/ruby/rbs"
+repository = "https://github.com/ruby/rbs.git"
+
+# Local fork of ruby-rbs 0.3.0 with added char-position accessors on
+# RBSLocationRange. Activated via [patch.crates-io] in the workspace root.
+# Remove this crate (and the patch entry) once upstream exposes start_char()
+# and end_char(). See src/node/mod.rs for the patched accessors.
+
+[dependencies]
+ruby-rbs-sys = "0.3"
+
+[build-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
