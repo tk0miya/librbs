@@ -16,6 +16,8 @@ use librbs_core::env::entry::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
 
 pub mod location;
+pub mod member;
+pub mod method_type;
 pub mod type_;
 pub mod type_name;
 pub mod type_param;
@@ -57,6 +59,22 @@ pub struct ClassRefs {
     pub types_function: RClass,
     pub types_function_param: RClass,
     pub types_untyped_function: RClass,
+    pub method_type: RClass,
+    pub annotation: RClass,
+    pub comment: RClass,
+    pub members_method_definition: RClass,
+    pub members_attr_accessor: RClass,
+    pub members_attr_reader: RClass,
+    pub members_attr_writer: RClass,
+    pub members_instance_variable: RClass,
+    pub members_class_instance_variable: RClass,
+    pub members_class_variable: RClass,
+    pub members_include: RClass,
+    pub members_extend: RClass,
+    pub members_prepend: RClass,
+    pub members_alias: RClass,
+    pub members_public: RClass,
+    pub members_private: RClass,
 }
 
 impl ClassRefs {
@@ -93,6 +111,23 @@ impl ClassRefs {
             types_function: ruby.eval("RBS::Types::Function")?,
             types_function_param: ruby.eval("RBS::Types::Function::Param")?,
             types_untyped_function: ruby.eval("RBS::Types::UntypedFunction")?,
+            method_type: ruby.eval("RBS::MethodType")?,
+            annotation: ruby.eval("RBS::AST::Annotation")?,
+            comment: ruby.eval("RBS::AST::Comment")?,
+            members_method_definition: ruby.eval("RBS::AST::Members::MethodDefinition")?,
+            members_attr_accessor: ruby.eval("RBS::AST::Members::AttrAccessor")?,
+            members_attr_reader: ruby.eval("RBS::AST::Members::AttrReader")?,
+            members_attr_writer: ruby.eval("RBS::AST::Members::AttrWriter")?,
+            members_instance_variable: ruby.eval("RBS::AST::Members::InstanceVariable")?,
+            members_class_instance_variable: ruby
+                .eval("RBS::AST::Members::ClassInstanceVariable")?,
+            members_class_variable: ruby.eval("RBS::AST::Members::ClassVariable")?,
+            members_include: ruby.eval("RBS::AST::Members::Include")?,
+            members_extend: ruby.eval("RBS::AST::Members::Extend")?,
+            members_prepend: ruby.eval("RBS::AST::Members::Prepend")?,
+            members_alias: ruby.eval("RBS::AST::Members::Alias")?,
+            members_public: ruby.eval("RBS::AST::Members::Public")?,
+            members_private: ruby.eval("RBS::AST::Members::Private")?,
         })
     }
 }
