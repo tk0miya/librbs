@@ -61,7 +61,7 @@ fn resolves_full_core_environment() {
 
     let mut loader = Loader::with_core_root(vendor_rbs().join("core"));
     let mut env = Environment::from_loader(&mut loader).unwrap();
-    let res = resolve(&mut env);
+    let res = resolve(&mut env, None);
     // The full core has thousands of type-name occurrences. We only
     // assert a coarse lower bound — exact byte-level compatibility is
     // verified on the Ruby side from M3c onward.
