@@ -14,14 +14,14 @@ use magnus::{Error, IntoValue, RArray, Value, kwargs, prelude::*, value::ReprVal
 
 use librbs_core::env::insert::find_type_name_node;
 use ruby_rbs::node::{
-    AliasTypeNode, AnyTypeNode, BlockTypeNode, ClassInstanceTypeNode, ClassSingletonTypeNode,
-    FunctionTypeNode, InterfaceTypeNode, IntersectionTypeNode, LiteralTypeNode, Node,
-    OptionalTypeNode, ProcTypeNode, RecordTypeNode, TupleTypeNode, UnionTypeNode,
-    UntypedFunctionTypeNode, VariableTypeNode,
+    AliasTypeNode, AnyTypeNode, ClassInstanceTypeNode, ClassSingletonTypeNode, FunctionTypeNode,
+    InterfaceTypeNode, IntersectionTypeNode, LiteralTypeNode, Node, OptionalTypeNode, ProcTypeNode,
+    RecordTypeNode, TupleTypeNode, UnionTypeNode, UntypedFunctionTypeNode, VariableTypeNode,
 };
 
 use crate::materialize::MaterializeCtx;
 use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::method_type::materialize_block;
 use crate::materialize::type_name::materialize_resolved_type_name;
 
 /// Dispatch a `Node` representing an `RBS::Types::*` variant into the
@@ -53,7 +53,7 @@ pub fn materialize_type(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result
         Node::ProcType(t) => proc_type(ctx, t),
         Node::FunctionType(t) => function_type(ctx, t),
         Node::UntypedFunctionType(t) => untyped_function_type(ctx, t),
-        Node::BlockType(t) => block_type(ctx, t),
+        Node::BlockType(t) => materialize_block(ctx, t),
         // Listing every other AST variant exhaustively here would force
         // a recompile each time the parser adds a new node. Instead we
         // panic — this branch is unreachable as long as
@@ -375,7 +375,7 @@ fn proc_type(ctx: &mut MaterializeCtx<'_>, node: &ProcTypeNode<'_>) -> Result<Va
     let loc = make_location(ctx, &node.location())?;
     let func = materialize_type(ctx, &node.type_())?;
     let block = match node.block() {
-        Some(b) => block_type(ctx, &b)?,
+        Some(b) => materialize_block(ctx, &b)?,
         None => ctx.ruby.qnil().as_value(),
     };
     let self_type = match node.self_type() {
@@ -388,28 +388,6 @@ fn proc_type(ctx: &mut MaterializeCtx<'_>, node: &ProcTypeNode<'_>) -> Result<Va
         .new_instance((kwargs!(
             "type" => func,
             "block" => block,
-            "self_type" => self_type,
-            "location" => loc
-        ),))?
-        .as_value())
-}
-
-pub(crate) fn block_type(
-    ctx: &mut MaterializeCtx<'_>,
-    node: &BlockTypeNode<'_>,
-) -> Result<Value, Error> {
-    let loc = make_location(ctx, &node.location())?;
-    let func = materialize_type(ctx, &node.type_())?;
-    let self_type = match node.self_type() {
-        Some(t) => materialize_type(ctx, &t)?,
-        None => ctx.ruby.qnil().as_value(),
-    };
-    Ok(ctx
-        .classes
-        .types_block
-        .new_instance((kwargs!(
-            "type" => func,
-            "required" => node.required(),
             "self_type" => self_type,
             "location" => loc
         ),))?

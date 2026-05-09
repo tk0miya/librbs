@@ -87,11 +87,11 @@ Removed at M3h.
 
 ## Acceptance
 
-- [ ] Every member variant in the table has a unit test that passes
+- [x] Every member variant in the table has a unit test that passes
       against pure-RBS JSON output.
-- [ ] `materialize/member.rs` matches `walk_member` exhaustively
+- [x] `materialize/member.rs` matches `walk_member` exhaustively
       (no wildcard fallthroughs).
-- [ ] All M3a–M3f specs remain green; canonical-dump compat still
+- [x] All M3a–M3f specs remain green; canonical-dump compat still
       `pending` (unblocked at M3h).
 
 ## References

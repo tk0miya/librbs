@@ -718,6 +718,162 @@ mod m3e_test_entries {
             .funcall("resolve_variables", (arr,))?;
         Ok(arr.as_value())
     }
+
+    /// `Librbs::Native._materialize_first_method_type(env)`. Walks to
+    /// the first class/module/interface declaration in source 0, picks
+    /// its first `MethodDefinition` member's first overload, and
+    /// materializes the overload's `MethodType` through M3g's
+    /// [`materialize_method_type`]. Compared against
+    /// `RBS::Parser.parse_method_type` JSON in
+    /// `spec/unit/materialize_method_type_spec.rb`.
+    pub(super) fn materialize_first_method_type(env_ruby: Value) -> Result<Value, Error> {
+        use ruby_rbs::node::MethodTypeNode;
+
+        let ruby = Ruby::get().expect("Ruby thread");
+        let (_handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+        let env: &librbs_core::Environment = unsafe { &*env_ptr };
+        let source = env
+            .sources
+            .first()
+            .ok_or_else(|| rb_runtime_err("env has no sources"))?;
+
+        let mut decl_counter: u32 = 0;
+        let mut found = None;
+        for decl in source.parser.signature().declarations().iter() {
+            let members = match &decl {
+                Node::Class(c) => Some(c.members()),
+                Node::Module(m) => Some(m.members()),
+                Node::Interface(i) => Some(i.members()),
+                _ => None,
+            };
+            if let Some(members) = members
+                && let Some(md) = members
+                    .iter()
+                    .find(|m| matches!(m, Node::MethodDefinition(_)))
+            {
+                found = Some((decl_counter, md));
+                break;
+            }
+            decl_counter += count_decl_subtree(&decl);
+        }
+        let (decl_index, method_def) =
+            found.ok_or_else(|| rb_runtime_err("no method definition found in source"))?;
+        let Node::MethodDefinition(md) = &method_def else {
+            unreachable!();
+        };
+        let first_overload = md
+            .overloads()
+            .iter()
+            .next()
+            .ok_or_else(|| rb_runtime_err("method has no overloads"))?;
+        let Node::MethodDefinitionOverload(overload) = &first_overload else {
+            return Err(rb_runtime_err("overload node has unexpected variant"));
+        };
+        let mt_node = overload.method_type();
+        let Node::MethodType(method_type) = &mt_node else {
+            return Err(rb_runtime_err("overload's method_type is not a MethodType"));
+        };
+        let mt: &MethodTypeNode<'_> = method_type;
+
+        let resolution_ptr = unsafe { read_resolution_ptr(env_ruby)? };
+        let resolution: Option<&Resolution> = resolution_ptr.map(|p| unsafe { &*p });
+        let classes = ClassRefs::resolve(&ruby)?;
+        let mut ctx = MaterializeCtx::new(&ruby, env, resolution, 0, classes);
+        ctx.enter_decl(librbs_core::env::entry::DeclRef {
+            source_index: 0,
+            decl_index,
+        });
+        materialize::method_type::materialize_method_type(&mut ctx, mt)
+    }
+
+    /// `Librbs::Native._materialize_first_member(env)`. Walks the first
+    /// class / module / interface declaration in source 0 and
+    /// materializes its **first** non-decl member through
+    /// [`materialize_member`]. Members are matched in source order so a
+    /// fixture can place exactly one member to test a given variant.
+    pub(super) fn materialize_first_member(env_ruby: Value) -> Result<Value, Error> {
+        let ruby = Ruby::get().expect("Ruby thread");
+        let (_handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+        let env: &librbs_core::Environment = unsafe { &*env_ptr };
+        let source = env
+            .sources
+            .first()
+            .ok_or_else(|| rb_runtime_err("env has no sources"))?;
+
+        let mut decl_counter: u32 = 0;
+        let mut found = None;
+        for decl in source.parser.signature().declarations().iter() {
+            let members = match &decl {
+                Node::Class(c) => Some(c.members()),
+                Node::Module(m) => Some(m.members()),
+                Node::Interface(i) => Some(i.members()),
+                _ => None,
+            };
+            if let Some(members) = members
+                && let Some(member) = members.iter().find(|m| {
+                    !matches!(
+                        m,
+                        Node::Class(_)
+                            | Node::Module(_)
+                            | Node::Interface(_)
+                            | Node::TypeAlias(_)
+                            | Node::Constant(_)
+                            | Node::Global(_)
+                            | Node::ClassAlias(_)
+                            | Node::ModuleAlias(_)
+                    )
+                })
+            {
+                found = Some((decl_counter, member));
+                break;
+            }
+            decl_counter += count_decl_subtree(&decl);
+        }
+        let (decl_index, member) =
+            found.ok_or_else(|| rb_runtime_err("no member found in source"))?;
+
+        let resolution_ptr = unsafe { read_resolution_ptr(env_ruby)? };
+        let resolution: Option<&Resolution> = resolution_ptr.map(|p| unsafe { &*p });
+        let classes = ClassRefs::resolve(&ruby)?;
+        let mut ctx = MaterializeCtx::new(&ruby, env, resolution, 0, classes);
+        ctx.enter_decl(librbs_core::env::entry::DeclRef {
+            source_index: 0,
+            decl_index,
+        });
+        materialize::member::materialize_member(&mut ctx, &member)
+    }
+
+    /// Pre-order count of declaration nodes inside `node`'s subtree
+    /// (including `node` itself). Mirrors the `is_decl_node` shape from
+    /// `librbs_core::env::insert::insert_decl` so `decl_counter` stays
+    /// aligned with the resolver driver's pre-order numbering even
+    /// when stepping over decls without entering them.
+    fn count_decl_subtree(node: &Node<'_>) -> u32 {
+        let mut c = 1;
+        let members = match node {
+            Node::Class(cl) => Some(cl.members()),
+            Node::Module(m) => Some(m.members()),
+            _ => None,
+        };
+        if let Some(members) = members {
+            for m in members.iter() {
+                if matches!(
+                    &m,
+                    Node::Class(_)
+                        | Node::Module(_)
+                        | Node::Interface(_)
+                        | Node::TypeAlias(_)
+                        | Node::Constant(_)
+                        | Node::Global(_)
+                        | Node::ClassAlias(_)
+                        | Node::ModuleAlias(_)
+                ) {
+                    c += count_decl_subtree(&m);
+                }
+            }
+        }
+        c
+    }
 }
 // =====================================================================
 // End of M3e temporary test-entry harness
@@ -823,6 +979,14 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.define_singleton_method(
         "_materialize_first_class_type_params",
         function!(m3e_test_entries::materialize_first_class_type_params, 1),
+    )?;
+    module.define_singleton_method(
+        "_materialize_first_method_type",
+        function!(m3e_test_entries::materialize_first_method_type, 1),
+    )?;
+    module.define_singleton_method(
+        "_materialize_first_member",
+        function!(m3e_test_entries::materialize_first_member, 1),
     )?;
 
     Ok(())
