@@ -127,7 +127,7 @@ fn resolve_source(
         source_index,
         decl_counter: 0,
         current_decl_ref: None,
-        env,
+        interner: &mut env.interner,
         resolver,
         use_map,
         resolution,
@@ -140,7 +140,7 @@ fn resolve_source(
     let context: Context = Vec::new();
     for decl in source.parser.signature().declarations().iter() {
         if let Some(set) = only
-            && !decl_matches_only(&decl, set, ctx.env.interner.frozen())
+            && !decl_matches_only(&decl, set, ctx.interner.frozen())
         {
             // Run the same recursion `walk_declaration` would have, but
             // only perform its counter side effect — keeping
@@ -284,7 +284,7 @@ struct WalkCtx<'env, 'tab> {
     /// no [`record_type_name`] call should ever fire (top-level walks
     /// dispatch into a decl arm immediately).
     current_decl_ref: Option<DeclRef>,
-    env: &'env mut Environment,
+    interner: &'env mut TypeNameInterner,
     resolver: &'env mut TypeNameResolver,
     use_map: UseMap<'tab>,
     resolution: &'env mut Resolution,
@@ -310,10 +310,8 @@ impl WalkCtx<'_, '_> {
 /// end
 /// ```
 fn record_type_name(ctx: &mut WalkCtx<'_, '_>, raw: TypeNameSym, context: &Context) {
-    let mapped = ctx.use_map.resolve(raw, &mut ctx.env.interner);
-    let resolved = ctx
-        .resolver
-        .resolve(mapped, context, ctx.env.interner.frozen());
+    let mapped = ctx.use_map.resolve(raw, ctx.interner);
+    let resolved = ctx.resolver.resolve(mapped, context, ctx.interner.frozen());
     let entry = match resolved {
         Some(sym) => ResolvedRef::Resolved(sym),
         None => ResolvedRef::Unresolved(mapped),
@@ -400,13 +398,13 @@ fn walk_declaration(ctx: &mut WalkCtx<'_, '_>, decl: &Node<'_>, context: &Contex
         Node::ClassAlias(a) => {
             // new_name carries no resolvable reference (it is the LHS of
             // the alias definition); only old_name is recorded.
-            let old = find_type_name_node(ctx.env.interner.frozen(), &a.old_name())
+            let old = find_type_name_node(ctx.interner.frozen(), &a.old_name())
                 .expect("alias old_name pre-interned by insert");
             record_type_name(ctx, old, context);
         }
         // environment.rb:702-709 — ModuleAlias.
         Node::ModuleAlias(a) => {
-            let old = find_type_name_node(ctx.env.interner.frozen(), &a.old_name())
+            let old = find_type_name_node(ctx.interner.frozen(), &a.old_name())
                 .expect("alias old_name pre-interned by insert");
             record_type_name(ctx, old, context);
         }
@@ -417,7 +415,7 @@ fn walk_declaration(ctx: &mut WalkCtx<'_, '_>, decl: &Node<'_>, context: &Contex
 
 fn walk_class(ctx: &mut WalkCtx<'_, '_>, c: &ClassNode<'_>, outer_context: &Context) {
     // environment.rb:591-594 — outer context, then push the inner.
-    let full_name = full_decl_name(ctx.env.interner.frozen(), &c.name(), outer_context);
+    let full_name = full_decl_name(ctx.interner.frozen(), &c.name(), outer_context);
     let mut inner_context = outer_context.clone();
     inner_context.push(full_name);
 
@@ -426,7 +424,7 @@ fn walk_class(ctx: &mut WalkCtx<'_, '_>, c: &ClassNode<'_>, outer_context: &Cont
 
     // environment.rb:598-604 — super_class against the OUTER context.
     if let Some(sc) = c.super_class() {
-        let super_tn = find_type_name_node(ctx.env.interner.frozen(), &sc.name())
+        let super_tn = find_type_name_node(ctx.interner.frozen(), &sc.name())
             .expect("super class name pre-interned by insert");
         record_type_name(ctx, super_tn, outer_context);
         for arg in sc.args().iter() {
@@ -442,7 +440,7 @@ fn walk_class(ctx: &mut WalkCtx<'_, '_>, c: &ClassNode<'_>, outer_context: &Cont
 
 fn walk_module(ctx: &mut WalkCtx<'_, '_>, m: &ModuleNode<'_>, outer_context: &Context) {
     // environment.rb:627-632.
-    let full_name = full_decl_name(ctx.env.interner.frozen(), &m.name(), outer_context);
+    let full_name = full_decl_name(ctx.interner.frozen(), &m.name(), outer_context);
     let mut inner_context = outer_context.clone();
     inner_context.push(full_name);
 
@@ -451,7 +449,7 @@ fn walk_module(ctx: &mut WalkCtx<'_, '_>, m: &ModuleNode<'_>, outer_context: &Co
     // environment.rb:634-640 — module self-types use the INNER context.
     for st in m.self_types().iter() {
         if let Node::ModuleSelf(ms) = &st {
-            let tn = find_type_name_node(ctx.env.interner.frozen(), &ms.name())
+            let tn = find_type_name_node(ctx.interner.frozen(), &ms.name())
                 .expect("module self-type name pre-interned by insert");
             record_type_name(ctx, tn, &inner_context);
             for arg in ms.args().iter() {
@@ -570,7 +568,7 @@ fn walk_mixin<'a>(
     args: impl Iterator<Item = Node<'a>>,
     context: &Context,
 ) {
-    let tn = find_type_name_node(ctx.env.interner.frozen(), name)
+    let tn = find_type_name_node(ctx.interner.frozen(), name)
         .expect("mixin name pre-interned by insert");
     record_type_name(ctx, tn, context);
     for arg in args {
@@ -686,7 +684,7 @@ fn walk_class_instance_type(
     t: &ClassInstanceTypeNode<'_>,
     context: &Context,
 ) {
-    let tn = find_type_name_node(ctx.env.interner.frozen(), &t.name())
+    let tn = find_type_name_node(ctx.interner.frozen(), &t.name())
         .expect("class-instance type name pre-interned by insert");
     record_type_name(ctx, tn, context);
     for arg in t.args().iter() {
@@ -695,7 +693,7 @@ fn walk_class_instance_type(
 }
 
 fn walk_interface_type(ctx: &mut WalkCtx<'_, '_>, t: &InterfaceTypeNode<'_>, context: &Context) {
-    let tn = find_type_name_node(ctx.env.interner.frozen(), &t.name())
+    let tn = find_type_name_node(ctx.interner.frozen(), &t.name())
         .expect("interface type name pre-interned by insert");
     record_type_name(ctx, tn, context);
     for arg in t.args().iter() {
@@ -704,7 +702,7 @@ fn walk_interface_type(ctx: &mut WalkCtx<'_, '_>, t: &InterfaceTypeNode<'_>, con
 }
 
 fn walk_alias_type(ctx: &mut WalkCtx<'_, '_>, t: &AliasTypeNode<'_>, context: &Context) {
-    let tn = find_type_name_node(ctx.env.interner.frozen(), &t.name())
+    let tn = find_type_name_node(ctx.interner.frozen(), &t.name())
         .expect("alias type name pre-interned by insert");
     record_type_name(ctx, tn, context);
     for arg in t.args().iter() {
@@ -717,7 +715,7 @@ fn walk_class_singleton_type(
     t: &ClassSingletonTypeNode<'_>,
     context: &Context,
 ) {
-    let tn = find_type_name_node(ctx.env.interner.frozen(), &t.name())
+    let tn = find_type_name_node(ctx.interner.frozen(), &t.name())
         .expect("class-singleton type name pre-interned by insert");
     record_type_name(ctx, tn, context);
 }
