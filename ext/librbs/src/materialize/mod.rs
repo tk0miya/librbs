@@ -14,6 +14,7 @@ use rustc_hash::FxHashMap;
 use librbs_core::Environment;
 use librbs_core::env::entry::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
+use librbs_core::interner::FrozenInterner;
 
 pub mod decl;
 pub mod location;
@@ -189,6 +190,13 @@ pub struct MaterializeCtx<'a> {
     #[allow(dead_code)]
     pub ruby: &'a Ruby,
     pub env: &'a Environment,
+    /// Read-only view of `env.interner`. Cached as a field so call
+    /// sites can write `ctx.interner.lookup(...)` instead of
+    /// `ctx.env.interner.frozen().lookup(...)` and so the read-only
+    /// intent is expressed in the type. `FrozenInterner` is `Copy`,
+    /// so storing it alongside the `&Environment` borrow costs
+    /// nothing at runtime.
+    pub interner: FrozenInterner<'a>,
     pub resolution: Option<&'a Resolution>,
     /// The source whose buffer / decls are currently being materialized.
     /// Switch via [`set_source`] when moving between sources within
@@ -251,6 +259,7 @@ impl<'a> MaterializeCtx<'a> {
         Self {
             ruby,
             env,
+            interner: env.interner.frozen(),
             resolution,
             source_index,
             classes,

@@ -578,8 +578,8 @@ fn include_member(ctx: &mut MaterializeCtx<'_>, node: &IncludeNode<'_>) -> Resul
         node.keyword_location(),
         node.args_location(),
     )?;
-    let raw = find_type_name_node(ctx.env.interner.frozen(), &node.name())
-        .expect("mixin name pre-interned by insert");
+    let raw =
+        find_type_name_node(ctx.interner, &node.name()).expect("mixin name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
     let args = build_args_array(ctx, node.args())?;
     let annotations = build_annotations(ctx, node.annotations())?;
@@ -605,8 +605,8 @@ fn extend_member(ctx: &mut MaterializeCtx<'_>, node: &ExtendNode<'_>) -> Result<
         node.keyword_location(),
         node.args_location(),
     )?;
-    let raw = find_type_name_node(ctx.env.interner.frozen(), &node.name())
-        .expect("mixin name pre-interned by insert");
+    let raw =
+        find_type_name_node(ctx.interner, &node.name()).expect("mixin name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
     let args = build_args_array(ctx, node.args())?;
     let annotations = build_annotations(ctx, node.annotations())?;
@@ -632,8 +632,8 @@ fn prepend_member(ctx: &mut MaterializeCtx<'_>, node: &PrependNode<'_>) -> Resul
         node.keyword_location(),
         node.args_location(),
     )?;
-    let raw = find_type_name_node(ctx.env.interner.frozen(), &node.name())
-        .expect("mixin name pre-interned by insert");
+    let raw =
+        find_type_name_node(ctx.interner, &node.name()).expect("mixin name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
     let args = build_args_array(ctx, node.args())?;
     let annotations = build_annotations(ctx, node.annotations())?;
