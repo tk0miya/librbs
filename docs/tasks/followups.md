@@ -250,34 +250,6 @@ belong in this list.
   numeric/alphabetic inputs and the exact `find_best_version` examples
   from `vendor/rbs/lib/rbs/repository.rb`.
 
-### `DeclRef` indexing consistency between insert and lookup
-
-- **Origin**: M2 review.
-- **Where**: `crates/librbs-core/src/env/insert.rs` (writer) and the
-  yet-to-be-written reader (likely `Source::decl_at(index)` or similar
-  in M3).
-- **What**: `DeclRef { source_index, decl_index }` is allocated in
-  pre-order during `insert_rbs_source` — top-level `signature.declarations()`
-  first, then recursively into `Class`/`Module` members filtered by
-  `is_decl_node`. M3 will need to look the decl back up by index. If the
-  reader walks the signature in a different order, or if `is_decl_node`
-  expands to admit new node kinds without updating the writer, indices
-  will silently drift and entries will point at the wrong AST nodes.
-  Today nothing reads `decl_index`, so the bug would surface only after
-  M3 starts using it.
-- **Required changes (when M3 adds a reader)**:
-  - Implement the reader using the same pre-order walk as
-    `insert_rbs_source` (factor the traversal into a shared helper if
-    possible, so writer and reader cannot disagree).
-  - Add a round-trip test: build an `Environment` from a fixture file,
-    iterate every entry, resolve its `DeclRef` back to a `Node`, and
-    assert the node's name/kind matches the entry.
-  - Consider hardening the writer so the dead `_ => {}` arm in
-    `insert_decl` does not silently increment `decl_index` when an
-    unexpected node slips through (`debug_assert!` on `is_decl_node`).
-- **When**: As part of the M3 work that introduces the first reader of
-  `DeclRef`.
-
 ### `NamespaceInterner::intern` allocates on every call
 
 - **Origin**: M2 review.

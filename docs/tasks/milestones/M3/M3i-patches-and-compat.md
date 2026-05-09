@@ -88,14 +88,14 @@ triggered by the `*_decls` accessors) is the single permitted exception.
 
 ## Acceptance
 
-- [ ] `spec/compat/core_spec.rb`, `core_stdlib_spec.rb`, `gems_spec.rb`
+- [x] `spec/compat/core_spec.rb`, `core_stdlib_spec.rb`, `gems_spec.rb`
       all green.
-- [ ] CI's `compat-test` job runs on every PR.
-- [ ] Direct `RBS::Environment.new` (pure path, no librbs handle) works
+- [x] CI's `compat-test` job runs on every PR.
+- [x] Direct `RBS::Environment.new` (pure path, no librbs handle) works
       end-to-end through the patched accessors.
-- [ ] Native-purity audit re-confirmed.
-- [ ] Parent M3 doc's acceptance section fully checked off.
-- [ ] Closed M2 followups removed from `followups.md`.
+- [x] Native-purity audit re-confirmed.
+- [x] Parent M3 doc's acceptance section fully checked off.
+- [x] Closed M2 followups removed from `followups.md`.
 
 ## References
 

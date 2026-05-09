@@ -432,13 +432,13 @@ The CI job `compat-test` runs all of them.
 ## Acceptance
 
 - [x] All `cargo test -p librbs-core` tests are green.
-- [ ] Canonical dumps for core only match pure RBS exactly.
-- [ ] Canonical dumps for core + stdlib match pure RBS exactly.
-- [ ] The major-gems matrix is green.
+- [x] Canonical dumps for core only match pure RBS exactly.
+- [x] Canonical dumps for core + stdlib match pure RBS exactly.
+- [x] The major-gems matrix is green.
 - [x] Code review confirms that the `from_loader` and `resolve_type_names`
       native paths **never call any Ruby method** (excluding the
       materialization path).
-- [ ] All CI jobs are green.
+- [x] All CI jobs are green.
 
 ## Out of scope for this milestone
 

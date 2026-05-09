@@ -5,5 +5,4 @@ module Librbs
   end
 end
 
-require "librbs/patches/environment_loader"
 require "librbs/patches/environment"
