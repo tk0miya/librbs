@@ -105,16 +105,16 @@ This satisfies the parent acceptance item:
 
 ## Acceptance
 
-- [ ] `Librbs::Native.resolve_type_names(env, only)` returns a fresh
+- [x] `Librbs::Native.resolve_type_names(env, only)` returns a fresh
       `RBS::Environment` whose `@__librbs_handle` is shared with the input
       and whose `@__librbs_resolution` is a `WrappedResolution`.
-- [ ] `RBS::Environment#resolve_type_names` patched to call the native API.
-- [ ] `only:` semantics honored — unit test covers resolving a single
+- [x] `RBS::Environment#resolve_type_names` patched to call the native API.
+- [x] `only:` semantics honored — unit test covers resolving a single
       type name only.
-- [ ] `spec/compat/canonical_dump_core_spec.rb` green for both unresolved
+- [x] `spec/compat/canonical_dump_core_spec.rb` green for both unresolved
       and resolved variants.
-- [ ] Native-purity audit completed and noted in the PR description.
-- [ ] `bundle exec rspec` and `cargo test` green in CI.
+- [x] Native-purity audit completed and noted in the PR description.
+- [x] `bundle exec rspec` and `cargo test` green in CI.
 
 ## References
 

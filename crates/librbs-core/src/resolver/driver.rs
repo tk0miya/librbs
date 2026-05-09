@@ -21,6 +21,8 @@
 //! family. Each Ruby `case decl when ...` branch becomes a Rust match arm
 //! with a `// environment.rb:NNN-NNN` comment.
 
+use rustc_hash::FxHashSet;
+
 use ruby_rbs::node::{
     AliasTypeNode, AttrAccessorNode, AttrReaderNode, AttrWriterNode, BlockTypeNode,
     ClassInstanceTypeNode, ClassNode, ClassSingletonTypeNode, FunctionTypeNode, InterfaceNode,
@@ -40,13 +42,18 @@ use crate::source::Source;
 
 /// `RBS::Environment#resolve_type_names`. Builds the resolver and the
 /// global `UseMap::Table`, then drives every source through
-/// [`resolve_source`].
+/// [`resolve_source`]. When `only` is `Some`, declarations whose
+/// entry-name isn't in the set are skipped — their type-name
+/// occurrences never enter the [`Resolution`] table, and downstream
+/// materialization falls back to the AST's original names (matching
+/// upstream's "decl is returned as-is" semantics for
+/// `resolve_type_names(only:)`).
 ///
 /// Sequential for the reasons outlined in the module header. Returns a
 /// merged [`Resolution`].
 //
 // environment.rb:522-560
-pub fn resolve(env: &mut Environment) -> Resolution {
+pub fn resolve(env: &mut Environment, only: Option<&FxHashSet<TypeNameSym>>) -> Resolution {
     let mut resolver = TypeNameResolver::build(env);
     let mut table = Table::new();
     table.populate_from(env);
@@ -66,7 +73,15 @@ pub fn resolve(env: &mut Environment) -> Resolution {
         // `Box<str>` for content, and the parsed `SignatureNode` borrows
         // from that box). We never resize `env.sources` during resolve.
         let src: &Source = unsafe { &*src_ptr };
-        resolve_source(idx as u32, src, env, &mut resolver, &table, &mut resolution);
+        resolve_source(
+            idx as u32,
+            src,
+            env,
+            &mut resolver,
+            &table,
+            &mut resolution,
+            only,
+        );
     }
     resolution
 }
@@ -83,6 +98,7 @@ fn resolve_source(
     resolver: &mut TypeNameResolver,
     table: &Table,
     resolution: &mut Resolution,
+    only: Option<&FxHashSet<TypeNameSym>>,
 ) {
     // environment.rb:534 — magic-comment short-circuit. When the source
     // begins with `# resolve-type-names: false`, the entire source is
@@ -119,8 +135,90 @@ fn resolve_source(
     // resolver, matching upstream's `nil`-cons-cell sentinel.
     let context: Context = Vec::new();
     for decl in source.parser.signature().declarations().iter() {
+        if let Some(set) = only
+            && !decl_matches_only(&decl, set, &mut ctx.env.interner)
+        {
+            // Run the same recursion `walk_declaration` would have, but
+            // only perform its counter side effect — keeping
+            // `decl_counter` aligned with insert's `DeclRef::decl_index`
+            // numbering even across skips, so M3e materialization can
+            // look entries up by `DeclRef` without an off-by-N gap from
+            // `only:` filtering.
+            consume_decl_ref(&decl, &mut ctx.decl_counter);
+            continue;
+        }
         walk_declaration(&mut ctx, &decl, &context);
     }
+}
+
+/// Walk `node` as `walk_declaration` would, performing only its
+/// counter side effect — one `decl_counter += 1` per
+/// `is_decl_node` visit, in the same pre-order as
+/// `env::insert::insert_decl`. The match arms intentionally mirror
+/// `walk_class` / `walk_module`'s nested-decl recursion (gated by
+/// `is_decl_node`) so that any future change to which AST shapes
+/// contain nested decls is applied in both places.
+///
+/// Direct counter increment is equivalent to
+/// `WalkCtx::next_decl_ref` because the latter's only side effect
+/// is `decl_counter += 1` — the returned `DeclRef` is unused by the
+/// driver. If `next_decl_ref` ever gains additional state, this
+/// helper must be updated alongside it.
+///
+/// Caller assumes `node` itself is a decl node; no `is_decl_node`
+/// check on the root.
+fn consume_decl_ref(node: &Node<'_>, counter: &mut u32) {
+    *counter += 1;
+    match node {
+        Node::Class(c) => {
+            for member in c.members().iter() {
+                if is_decl_node(&member) {
+                    consume_decl_ref(&member, counter);
+                }
+            }
+        }
+        Node::Module(m) => {
+            for member in m.members().iter() {
+                if is_decl_node(&member) {
+                    consume_decl_ref(&member, counter);
+                }
+            }
+        }
+        // Interface / TypeAlias / Constant / Global / ClassAlias /
+        // ModuleAlias have no nested decls — `insert_decl` issues a
+        // single DeclRef and returns.
+        _ => {}
+    }
+}
+
+/// Compute the absolute name a top-level declaration would register
+/// under, then test it against the `only:` filter. Anchor against the
+/// absolute root (mirrors `prefix: Namespace.root` in
+/// `RBS::Environment#resolve_signature`, environment.rb:515) so the
+/// comparison key matches exactly the entry-name M2 inserted into the
+/// `*_decls` tables.
+fn decl_matches_only(
+    decl: &Node<'_>,
+    only: &FxHashSet<TypeNameSym>,
+    interner: &mut TypeNameInterner,
+) -> bool {
+    let name_node = match decl {
+        Node::Class(c) => c.name(),
+        Node::Module(m) => m.name(),
+        Node::Interface(i) => i.name(),
+        Node::TypeAlias(a) => a.name(),
+        Node::Constant(c) => c.name(),
+        Node::ClassAlias(a) => a.new_name(),
+        Node::ModuleAlias(a) => a.new_name(),
+        // Globals key by `Sym`, never by `TypeNameSym` — they can never
+        // be selected by an `only:` set of `TypeName`s. Skip them.
+        Node::Global(_) => return false,
+        _ => return false,
+    };
+    let inner = intern_type_name_node(interner, &name_node);
+    let root = interner.namespaces.root_absolute();
+    let full = interner.with_prefix(root, inner);
+    only.contains(&full)
 }
 
 /// Detects the `# resolve-type-names: false` magic comment at the very
@@ -763,6 +861,43 @@ impl_clone_via_as_node!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::ManagedParser;
+
+    fn parse(src: &str) -> ManagedParser {
+        ManagedParser::parse(src.to_string()).unwrap()
+    }
+
+    #[test]
+    fn consume_decl_ref_advances_counter_per_pre_order_decl() {
+        // The driver's `decl_counter` must advance by the same amount
+        // `env::insert::insert_decl` would consume for the same
+        // declaration subtree, otherwise `only:` skipping desyncs the
+        // counter against insert's `DeclRef::decl_index` (M3e
+        // materialization will look entries up by that index).
+        //
+        // Hand-counted expectations:
+        // - leaf `class A end`                      → 1 (just A)
+        // - `class A; class B end end`              → 2 (A, B)
+        // - `class A; class B; class C end end end` → 3 (A, B, C)
+        // - `module M; class A end; class B end end`→ 3 (M, A, B)
+        // - `class A; def foo: -> void end`         → 1 (member is not a decl)
+        // - `interface _Each end` (no nesting allowed) → 1
+        let cases: &[(&str, u32)] = &[
+            ("class A end\n", 1),
+            ("class A\n  class B end\nend\n", 2),
+            ("class A\n  class B\n    class C end\n  end\nend\n", 3),
+            ("module M\n  class A end\n  class B end\nend\n", 3),
+            ("class A\n  def foo: () -> void\nend\n", 1),
+            ("interface _Each end\n", 1),
+        ];
+        for (src, expected) in cases {
+            let parser = parse(src);
+            let decl = parser.signature().declarations().iter().next().unwrap();
+            let mut counter: u32 = 0;
+            consume_decl_ref(&decl, &mut counter);
+            assert_eq!(counter, *expected, "subtree count for {src:?}");
+        }
+    }
 
     #[test]
     fn detects_resolve_type_names_false_at_start() {

@@ -47,7 +47,7 @@ fn resolves_super_class_to_absolute_name() {
     let mut env = build_env(&[r#"class Foo end
 class Bar < Foo end
 "#]);
-    let resolution = resolve(&mut env);
+    let resolution = resolve(&mut env, None);
 
     assert_eq!(resolution.len(), 1);
     let entry = resolution
@@ -66,7 +66,7 @@ class Bar < Foo end
 #[test]
 fn unknown_super_class_is_recorded_as_unresolved() {
     let mut env = build_env(&[r#"class Foo < Unknown end"#]);
-    let resolution = resolve(&mut env);
+    let resolution = resolve(&mut env, None);
 
     let entry = resolution
         .type_name_resolutions
@@ -89,7 +89,7 @@ fn magic_comment_disables_resolution_for_that_source() {
         "# resolve-type-names: false\nclass A end\nclass B < A end\n",
         "class C end\nclass D < C end\n",
     ]);
-    let resolution = resolve(&mut env);
+    let resolution = resolve(&mut env, None);
 
     assert!(
         resolution
@@ -100,6 +100,38 @@ fn magic_comment_disables_resolution_for_that_source() {
         resolution.type_name_resolutions.keys().collect::<Vec<_>>()
     );
     assert_eq!(resolution.len(), 1);
+}
+
+#[test]
+fn only_filter_resolves_named_decl_only() {
+    // Two top-level classes that each reference an absolute name. With
+    // `only` set to `{::Bar}`, only `Bar`'s super-class reference should
+    // appear in the resolution table — `Foo`'s body is skipped.
+    let mut env = build_env(&[r#"class Base end
+class Foo < Base end
+class Bar < Base end
+"#]);
+
+    let bar_sym = env
+        .class_decls
+        .keys()
+        .find(|k| env.interner.to_string(**k) == "::Bar")
+        .copied()
+        .unwrap();
+    let mut only = rustc_hash::FxHashSet::default();
+    only.insert(bar_sym);
+
+    let resolution = resolve(&mut env, Some(&only));
+
+    let base_sym = env
+        .class_decls
+        .keys()
+        .find(|k| env.interner.to_string(**k) == "::Base")
+        .copied()
+        .unwrap();
+    let resolved: Vec<ResolvedRef> = resolution.type_name_resolutions.values().copied().collect();
+    assert_eq!(resolved.len(), 1, "only Bar's super-class should resolve");
+    assert_eq!(resolved[0], ResolvedRef::Resolved(base_sym));
 }
 
 #[test]
@@ -120,7 +152,7 @@ class A = Foo
 "#]);
     // Trigger resolution to populate side-tables (also ensures resolve
     // can run on this fixture).
-    let _ = resolve(&mut env);
+    let _ = resolve(&mut env, None);
 
     // ClassLikeEntry: every (context, decl_ref) pair points to a
     // Class/Module node whose simple name matches the entry's last

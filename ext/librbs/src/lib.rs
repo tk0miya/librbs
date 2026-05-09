@@ -2,10 +2,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use magnus::{
-    Error, IntoValue, RArray, Ruby, TryConvert, Value, function, prelude::*, value::ReprValue,
+    Error, IntoValue, RArray, Ruby, Symbol, TryConvert, Value, function, prelude::*,
+    value::ReprValue,
 };
+use rustc_hash::FxHashSet;
 
 use librbs_core::env::resolution::Resolution;
+use librbs_core::interner::{Sym, TypeNameInterner, TypeNameKind, TypeNameSym};
 
 /// Magnus wrapper around `Arc<librbs_core::Environment>`. Boxed inside a
 /// hidden Ruby class (`Librbs::Native::WrappedEnvironment`) and stashed on
@@ -20,6 +23,12 @@ use librbs_core::env::resolution::Resolution;
 #[allow(dead_code)]
 struct WrappedEnvironment(Arc<librbs_core::Environment>);
 
+impl WrappedEnvironment {
+    fn arc(&self) -> &Arc<librbs_core::Environment> {
+        &self.0
+    }
+}
+
 /// Magnus wrapper around `Arc<librbs_core::env::resolution::Resolution>`.
 /// M3c does not yet write `@__librbs_resolution`, but defining the class
 /// here means M3d does not have to perform any registration churn — it
@@ -27,6 +36,12 @@ struct WrappedEnvironment(Arc<librbs_core::Environment>);
 #[magnus::wrap(class = "Librbs::Native::WrappedResolution", free_immediately, size)]
 #[allow(dead_code)]
 struct WrappedResolution(Arc<Resolution>);
+
+impl WrappedResolution {
+    fn new(resolution: Resolution) -> Self {
+        Self(Arc::new(resolution))
+    }
+}
 
 fn rb_runtime_err<E: std::fmt::Display>(e: E) -> Error {
     let ruby = Ruby::get().expect("Ruby thread");
@@ -124,6 +139,142 @@ fn inject_stringio(core_root: Option<&PathBuf>, libs: &mut Vec<(String, Option<S
     }
 }
 
+/// Read the input env's `@__librbs_handle` ivar and return the raw
+/// Ruby value plus a `*mut Environment` pointing at the Arc-managed
+/// allocation. The pointer is *not* derived from an `Arc::clone` —
+/// keeping the strong count at 1 is what makes the unsafe mutation in
+/// [`resolve_type_names`] sound (see the safety comment there).
+///
+/// Errors if the ivar is missing or wraps a foreign type — the
+/// patched API only ever stores a `WrappedEnvironment` under that
+/// name, so a missing handle indicates someone constructed an
+/// `RBS::Environment` outside `from_loader` and tried to call
+/// `resolve_type_names` on it.
+fn extract_env_handle(env_ruby: Value) -> Result<(Value, *mut librbs_core::Environment), Error> {
+    let handle = ivar_get(env_ruby, "@__librbs_handle")?;
+    if handle.is_nil() {
+        return Err(rb_runtime_err(
+            "RBS::Environment has no @__librbs_handle; it must be built via Librbs::Native.build_environment",
+        ));
+    }
+    let wrapped: &WrappedEnvironment = TryConvert::try_convert(handle)?;
+    let env_ptr = Arc::as_ptr(wrapped.arc()) as *mut librbs_core::Environment;
+    Ok((handle, env_ptr))
+}
+
+/// Convert a `RBS::Namespace` Ruby instance into a `(path, absolute)` pair
+/// using ivar reads only. `@path` is an `Array<Symbol>`, `@absolute` is a
+/// boolean.
+fn read_namespace_components(ns: Value) -> Result<(Vec<String>, bool), Error> {
+    let path_v = ivar_get(ns, "@path")?;
+    let absolute_v = ivar_get(ns, "@absolute")?;
+    let absolute = absolute_v.to_bool();
+    let arr = RArray::try_convert(path_v)?;
+    let mut path = Vec::with_capacity(arr.len());
+    for seg in arr.into_iter() {
+        let sym = Symbol::try_convert(seg)?;
+        path.push(sym.name()?.into_owned());
+    }
+    Ok((path, absolute))
+}
+
+/// Intern a single `RBS::TypeName` instance into the supplied interner
+/// using only ivar reads (no Ruby method calls). The kind tag is
+/// determined from the leaf name's first character, mirroring
+/// `TypeNameKind::detect`.
+fn intern_ruby_type_name(
+    interner: &mut TypeNameInterner,
+    type_name: Value,
+) -> Result<TypeNameSym, Error> {
+    let ns_v = ivar_get(type_name, "@namespace")?;
+    let name_v = ivar_get(type_name, "@name")?;
+    let name_sym = Symbol::try_convert(name_v)?;
+    let name_str = name_sym.name()?.into_owned();
+    let (path_strs, absolute) = read_namespace_components(ns_v)?;
+
+    let segs: Vec<Sym> = path_strs
+        .iter()
+        .map(|s| interner.symbols.intern(s))
+        .collect();
+    let ns = interner.namespaces.intern(&segs, absolute);
+    let name = interner.symbols.intern(&name_str);
+    let kind = TypeNameKind::detect(&name_str);
+    Ok(interner.intern(ns, name, kind))
+}
+
+/// Convert the `only:` parameter — an `Array<RBS::TypeName>` (the
+/// patched ruby side already turned the `Set` into an `Array`) or
+/// `nil` — into an `Option<FxHashSet<TypeNameSym>>`. Returns `None` to
+/// mean "resolve every declaration".
+fn convert_only(
+    interner: &mut TypeNameInterner,
+    only: Value,
+) -> Result<Option<FxHashSet<TypeNameSym>>, Error> {
+    if only.is_nil() {
+        return Ok(None);
+    }
+    let arr = RArray::try_convert(only)?;
+    let mut out: FxHashSet<TypeNameSym> = FxHashSet::default();
+    for tn in arr.into_iter() {
+        out.insert(intern_ruby_type_name(interner, tn)?);
+    }
+    Ok(Some(out))
+}
+
+fn resolve_type_names(env_ruby: Value, only: Value) -> Result<Value, Error> {
+    let ruby = Ruby::get().expect("Ruby thread");
+
+    let (handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+
+    // Safety: we mutate the `Environment` behind a shared `Arc` via a raw
+    // pointer rather than introducing interior mutability on the type.
+    // This is sound under the following invariants, all of which hold for
+    // the M3 patch-based design:
+    //
+    // 1. The `WrappedEnvironment` we read from `@__librbs_handle` owns
+    //    the *only* `Arc<Environment>` clone for that allocation. No
+    //    other Arc clones exist while we run because `extract_env_handle`
+    //    deliberately does not call `Arc::clone`; it produces a raw
+    //    pointer derived from the wrapped Arc itself. (`from_loader` is
+    //    likewise the sole creator of the Arc.) Strong count is 1.
+    // 2. Ruby's GVL serializes execution. No other Ruby thread can race
+    //    with us, and no Ruby callback runs during `resolve` /
+    //    `resolve_only` — they are pure Rust. The input env's ivar
+    //    therefore cannot be observed in a half-mutated state.
+    // 3. The `&mut Environment` we synthesize is local to this function
+    //    and never escapes. It is dropped before we re-attach
+    //    `handle_value` to the new env via `ivar_set`.
+    //
+    // M3e materialization will add an extra Arc clone path; before that
+    // ships, this safety argument needs to be re-checked (and the
+    // followup "Reimplement RBS::Environment in Rust" likely closes
+    // this hatch entirely by giving the env interior mutability).
+    let env: &mut librbs_core::Environment = unsafe { &mut *env_ptr };
+
+    let only_set: Option<FxHashSet<TypeNameSym>> = convert_only(&mut env.interner, only)?;
+
+    let resolution = librbs_core::resolver::driver::resolve(env, only_set.as_ref());
+
+    // Allocate a fresh `RBS::Environment`. Pattern matches `build_environment`:
+    // `allocate` + `send(:initialize)` so the upstream `@class_decls = {}`
+    // etc. ivars exist for any future `super` call. (See the M3 followup
+    // "Reimplement RBS::Environment in Rust" for why this allocate-and-
+    // initialize dance survives in the patch-based design.)
+    let rbs_env_class: magnus::RClass = ruby.eval("RBS::Environment")?;
+    let rbs_env: Value = rbs_env_class.obj_alloc()?.as_value();
+    let _: Value = rbs_env.funcall("send", (ruby.to_symbol("initialize"),))?;
+
+    // Reuse the *same* `WrappedEnvironment` Ruby object on the new env so
+    // `dst.@__librbs_handle.equal?(src.@__librbs_handle)` — the documented
+    // "shared Arc<Environment>" invariant from the M3d task spec is
+    // observable via Ruby object identity, not just Arc-target identity.
+    ivar_set(rbs_env, "@__librbs_handle", handle_value)?;
+    let wrapped_res: Value = WrappedResolution::new(resolution).into_value_with(&ruby);
+    ivar_set(rbs_env, "@__librbs_resolution", wrapped_res)?;
+
+    Ok(rbs_env)
+}
+
 fn build_environment(loader: Value) -> Result<Value, Error> {
     let ruby = Ruby::get().expect("Ruby thread");
 
@@ -175,5 +326,6 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     wrapped_res_class.undef_default_alloc_func();
 
     module.define_singleton_method("build_environment", function!(build_environment, 1))?;
+    module.define_singleton_method("resolve_type_names", function!(resolve_type_names, 2))?;
     Ok(())
 }
