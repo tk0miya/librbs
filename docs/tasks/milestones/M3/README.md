@@ -1,7 +1,7 @@
 # M3 Subtask Index
 
 M3 (the "main milestone") is too large to deliver in a single session. It is
-split into the nine self-contained slices below. Each slice is intended to
+split into the ten self-contained slices below. Each slice is intended to
 land as one PR and to be picked up by a fresh agent session.
 
 The parent design document is
@@ -21,6 +21,7 @@ acceptance criteria that the slices collectively satisfy.
 | [M3g](M3g-method-types-and-members.md) | `RBS::MethodType` + `RBS::AST::Members::*` | M3f |
 | [M3h](M3h-decls-and-cutover.md) | `RBS::AST::Declarations::*` + `Environment::*Entry` + `materialize_all` cut-over + accessor patches | M3g |
 | [M3i](M3i-patches-and-compat.md) | Patches polish + core+stdlib + major-gems compat matrix | M3h |
+| [M3j](M3j-writer-based-tests.md) | Replace per-piece materialize/resolve helpers with `RBS::Writer`-based per-decl text oracle | M3i |
 
 The original M3 plan had a single materialization slice (old M3e) covering
 every AST variant. The PR-#10 retrospective (an attempted single-slice
