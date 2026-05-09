@@ -9,7 +9,9 @@ use crate::env::entry::{
     DeclRef, GlobalEntry, InterfaceEntry, ModuleAliasEntry, ModuleEntry, TypeAliasEntry,
 };
 use crate::error::{Error, Result};
-use crate::interner::{NamespaceSym, Sym, TypeNameInterner, TypeNameKind, TypeNameSym};
+use crate::interner::{
+    FrozenInterner, NamespaceSym, Sym, TypeNameInterner, TypeNameKind, TypeNameSym,
+};
 
 /// Walk one parsed signature and register its declarations into `env`.
 pub fn insert_rbs_source(
@@ -59,6 +61,33 @@ pub fn intern_type_name_node(
     let name_node = node.name();
     let name = interner.symbols.intern(name_node.as_str());
     let ns = interner.namespaces.intern(&path, absolute);
+    let kind = TypeNameKind::detect(name_node.as_str());
+    interner.intern(ns, name, kind)
+}
+
+/// Read-only counterpart of [`intern_type_name_node`]. Returns
+/// `Some(sym)` only if every segment, the leaf name, the namespace
+/// path and the resulting `(ns, name, kind)` tuple have already been
+/// interned. After [`insert_rbs_source`] has run on a signature, every
+/// `TypeNameNode` reachable from one of its declarations is guaranteed
+/// to be findable via this function (see the reference-interning
+/// walkers below); callers in the resolver driver can therefore avoid
+/// taking `&mut TypeNameInterner` entirely.
+pub(crate) fn find_type_name_node(
+    interner: FrozenInterner<'_>,
+    node: &TypeNameNode<'_>,
+) -> Option<TypeNameSym> {
+    let ns_node = node.namespace();
+    let absolute = ns_node.absolute();
+    let mut path: Vec<Sym> = Vec::new();
+    for seg in ns_node.path().iter() {
+        if let Node::Symbol(sym) = seg {
+            path.push(interner.symbols().intern(sym.as_str())?);
+        }
+    }
+    let name_node = node.name();
+    let name = interner.symbols().intern(name_node.as_str())?;
+    let ns = interner.namespaces().intern(&path, absolute)?;
     let kind = TypeNameKind::detect(name_node.as_str());
     interner.intern(ns, name, kind)
 }

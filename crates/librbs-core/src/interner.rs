@@ -32,6 +32,8 @@ impl TypeNameKind {
     }
 }
 
+// ---------- SymbolInterner ----------
+
 #[derive(Debug, Default)]
 pub struct SymbolInterner {
     map: HashMap<String, Sym>,
@@ -64,7 +66,15 @@ impl SymbolInterner {
     pub fn is_empty(&self) -> bool {
         self.rev.is_empty()
     }
+
+    /// Read-only lookup by string. Exposed to consumers via
+    /// [`FrozenSymbols::intern`].
+    fn find(&self, s: &str) -> Option<Sym> {
+        self.map.get(s).copied()
+    }
 }
+
+// ---------- NamespaceInterner ----------
 
 #[derive(Debug, Default)]
 pub struct NamespaceInterner {
@@ -118,11 +128,10 @@ impl NamespaceInterner {
     /// `RBS::Namespace#append`: returns the namespace `ns` with `seg`
     /// appended at the end.
     pub fn append(&mut self, ns: NamespaceSym, seg: Sym) -> NamespaceSym {
-        let (path, absolute) = self.lookup(ns);
-        let mut new_path = path.clone();
-        let abs = *absolute;
-        new_path.push(seg);
-        self.intern_owned(new_path, abs)
+        match self.append_lookup(ns, seg) {
+            Ok(found) => found,
+            Err((path, absolute)) => self.intern_owned(path, absolute),
+        }
     }
 
     /// Join two namespaces with the same asymmetric rule as
@@ -130,14 +139,10 @@ impl NamespaceInterner {
     /// absolute, it replaces `lhs` entirely; otherwise the paths are
     /// concatenated and the result keeps `lhs`'s absolute flag.
     pub fn join(&mut self, lhs: NamespaceSym, rhs: NamespaceSym) -> NamespaceSym {
-        let (rpath, rabs) = self.lookup(rhs).clone();
-        if rabs {
-            return rhs;
+        match self.join_lookup(lhs, rhs) {
+            Ok(found) => found,
+            Err((path, absolute)) => self.intern_owned(path, absolute),
         }
-        let (lpath, labs) = self.lookup(lhs).clone();
-        let mut path = lpath;
-        path.extend(rpath);
-        self.intern_owned(path, labs)
     }
 
     /// `RBS::Namespace#empty?` — true when the path has no segments,
@@ -173,7 +178,52 @@ impl NamespaceInterner {
         parent.pop();
         Some((self.intern_owned(parent, absolute), last))
     }
+
+    // ---------- Read-only primitives ----------
+    //
+    // The `*_lookup` helpers below produce `Result<Sym, components>`:
+    // `Ok` if the namespace already exists, `Err` carrying the path +
+    // absolute flag otherwise. Mutating wrappers (`append`, `join`)
+    // discard the `Err` payload through `intern_owned`; the read-only
+    // [`FrozenNamespaces`] view discards `Err` through `Result::ok`.
+    // Both paths share the same candidate construction.
+
+    fn find(&self, path: &[Sym], absolute: bool) -> Option<NamespaceSym> {
+        self.map.get(&(path.to_vec(), absolute)).copied()
+    }
+
+    fn append_lookup(&self, ns: NamespaceSym, seg: Sym) -> Result<NamespaceSym, (Vec<Sym>, bool)> {
+        let (path, absolute) = self.lookup(ns);
+        let mut new_path = path.clone();
+        new_path.push(seg);
+        let absolute = *absolute;
+        match self.find(&new_path, absolute) {
+            Some(found) => Ok(found),
+            None => Err((new_path, absolute)),
+        }
+    }
+
+    fn join_lookup(
+        &self,
+        lhs: NamespaceSym,
+        rhs: NamespaceSym,
+    ) -> Result<NamespaceSym, (Vec<Sym>, bool)> {
+        let (rpath, rabs) = self.lookup(rhs);
+        if *rabs {
+            return Ok(rhs);
+        }
+        let (lpath, labs) = self.lookup(lhs);
+        let mut path = lpath.clone();
+        path.extend_from_slice(rpath);
+        let absolute = *labs;
+        match self.find(&path, absolute) {
+            Some(found) => Ok(found),
+            None => Err((path, absolute)),
+        }
+    }
 }
+
+// ---------- TypeNameInterner ----------
 
 #[derive(Debug, Default)]
 pub struct TypeNameInterner {
@@ -253,6 +303,147 @@ impl TypeNameInterner {
         out.push_str(self.symbols.lookup(name));
         out
     }
+
+    /// Borrow `self` as a read-only [`FrozenInterner`] view. Use this when handing
+    /// the interner to the resolver or any other consumer that should
+    /// not mutate it.
+    pub fn frozen(&self) -> FrozenInterner<'_> {
+        FrozenInterner { inner: self }
+    }
+
+    fn find(&self, namespace: NamespaceSym, name: Sym, kind: TypeNameKind) -> Option<TypeNameSym> {
+        self.map.get(&(namespace, name, kind)).copied()
+    }
+}
+
+// ---------- FrozenInterner views ----------
+//
+// Borrow newtypes that re-expose the read side of the three interners
+// under the same operation names as their mutating counterparts
+// (`intern`, `with_prefix`, `to_namespace`, `join`, `append`, …). Each
+// "would-add-an-entry" call returns `Option`: the operation succeeds
+// only if the entry has already been interned. A `None` from `FrozenInterner`
+// therefore says "not in the table"; the resolver treats that as
+// equivalent to "no declaration matches".
+
+/// Read-only borrow of a [`TypeNameInterner`]. Construct via
+/// [`TypeNameInterner::frozen`].
+#[derive(Debug, Copy, Clone)]
+pub struct FrozenInterner<'a> {
+    inner: &'a TypeNameInterner,
+}
+
+impl<'a> FrozenInterner<'a> {
+    pub fn new(interner: &'a TypeNameInterner) -> Self {
+        Self { inner: interner }
+    }
+
+    pub fn namespaces(self) -> FrozenNamespaces<'a> {
+        FrozenNamespaces(&self.inner.namespaces)
+    }
+
+    pub fn symbols(self) -> FrozenSymbols<'a> {
+        FrozenSymbols(&self.inner.symbols)
+    }
+
+    pub fn intern(
+        &self,
+        namespace: NamespaceSym,
+        name: Sym,
+        kind: TypeNameKind,
+    ) -> Option<TypeNameSym> {
+        self.inner.find(namespace, name, kind)
+    }
+
+    pub fn with_prefix(&self, prefix: NamespaceSym, inner: TypeNameSym) -> Option<TypeNameSym> {
+        let (inner_ns, inner_name, inner_kind) = self.inner.lookup(inner);
+        let combined = self.namespaces().join(prefix, inner_ns)?;
+        self.intern(combined, inner_name, inner_kind)
+    }
+
+    pub fn to_namespace(&self, tn: TypeNameSym) -> Option<NamespaceSym> {
+        let (ns, name, _) = self.inner.lookup(tn);
+        self.namespaces().append(ns, name)
+    }
+
+    pub fn lookup(&self, tn: TypeNameSym) -> (NamespaceSym, Sym, TypeNameKind) {
+        self.inner.lookup(tn)
+    }
+
+    pub fn name_of(&self, tn: TypeNameSym) -> Sym {
+        self.inner.name_of(tn)
+    }
+
+    pub fn namespace_of(&self, tn: TypeNameSym) -> NamespaceSym {
+        self.inner.namespace_of(tn)
+    }
+
+    pub fn kind_of(&self, tn: TypeNameSym) -> TypeNameKind {
+        self.inner.kind_of(tn)
+    }
+
+    pub fn to_string(&self, tn: TypeNameSym) -> String {
+        self.inner.to_string(tn)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct FrozenNamespaces<'a>(&'a NamespaceInterner);
+
+impl<'a> FrozenNamespaces<'a> {
+    pub fn intern(&self, path: &[Sym], absolute: bool) -> Option<NamespaceSym> {
+        self.0.find(path, absolute)
+    }
+
+    pub fn join(&self, lhs: NamespaceSym, rhs: NamespaceSym) -> Option<NamespaceSym> {
+        self.0.join_lookup(lhs, rhs).ok()
+    }
+
+    pub fn append(&self, ns: NamespaceSym, seg: Sym) -> Option<NamespaceSym> {
+        self.0.append_lookup(ns, seg).ok()
+    }
+
+    pub fn to_type_name(&self, ns: NamespaceSym) -> Option<(NamespaceSym, Sym)> {
+        let (path, absolute) = self.0.lookup(ns);
+        let last = *path.last()?;
+        let mut parent = path.clone();
+        parent.pop();
+        let parent_ns = self.intern(&parent, *absolute)?;
+        Some((parent_ns, last))
+    }
+
+    pub fn lookup(&self, ns: NamespaceSym) -> &'a (Vec<Sym>, bool) {
+        self.0.lookup(ns)
+    }
+
+    pub fn empty_relative(&self) -> NamespaceSym {
+        self.0.empty_relative()
+    }
+
+    pub fn root_absolute(&self) -> NamespaceSym {
+        self.0.root_absolute()
+    }
+
+    pub fn is_empty(&self, ns: NamespaceSym) -> bool {
+        self.0.is_empty(ns)
+    }
+
+    pub fn is_relative(&self, ns: NamespaceSym) -> bool {
+        self.0.is_relative(ns)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct FrozenSymbols<'a>(&'a SymbolInterner);
+
+impl<'a> FrozenSymbols<'a> {
+    pub fn intern(&self, s: &str) -> Option<Sym> {
+        self.0.find(s)
+    }
+
+    pub fn lookup(&self, sym: Sym) -> &'a str {
+        self.0.lookup(sym)
+    }
 }
 
 #[cfg(test)]
@@ -319,5 +510,50 @@ mod tests {
         // Empty namespaces cannot be split.
         assert_eq!(ni.to_type_name(ni.root_absolute()), None);
         assert_eq!(ni.to_type_name(ni.empty_relative()), None);
+    }
+
+    #[test]
+    fn frozen_intern_misses_for_uninterned_typename() {
+        let mut interner = TypeNameInterner::new();
+        let foo = interner.symbols.intern("Foo");
+        let root = interner.namespaces.root_absolute();
+        // Not yet interned through TypeNameInterner::intern.
+        assert_eq!(
+            interner.frozen().intern(root, foo, TypeNameKind::Class),
+            None
+        );
+        // After interning, frozen lookup hits.
+        let tn = interner.intern(root, foo, TypeNameKind::Class);
+        assert_eq!(
+            interner.frozen().intern(root, foo, TypeNameKind::Class),
+            Some(tn),
+        );
+    }
+
+    #[test]
+    fn frozen_join_returns_none_when_path_uninterned() {
+        let mut interner = TypeNameInterner::new();
+        let foo = interner.symbols.intern("Foo");
+        let bar = interner.symbols.intern("Bar");
+        let root = interner.namespaces.root_absolute();
+        let foo_abs = interner.namespaces.intern(&[foo], true);
+        let bar_rel = interner.namespaces.intern(&[bar], false);
+        // join would produce [Foo, Bar] absolute, which has not been
+        // interned yet.
+        assert_eq!(interner.frozen().namespaces().join(foo_abs, bar_rel), None);
+        // Mutating join interns it; frozen now succeeds.
+        let combined = interner.namespaces.join(foo_abs, bar_rel);
+        assert_eq!(
+            interner.frozen().namespaces().join(foo_abs, bar_rel),
+            Some(combined),
+        );
+        // Absolute rhs short-circuits regardless of intern state.
+        let baz_abs = interner
+            .namespaces
+            .intern(&[interner.symbols.intern("Baz")], true);
+        assert_eq!(
+            interner.frozen().namespaces().join(root, baz_abs),
+            Some(baz_abs),
+        );
     }
 }
