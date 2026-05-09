@@ -70,6 +70,63 @@ belong in this list.
   natural next step. If they're not, the patches can stay
   indefinitely and this followup becomes a nice-to-have.
 
+### `resolve_type_names` mutates the source env's shared core state
+
+- **Origin**: M3d review.
+- **Where**: `ext/librbs/src/lib.rs` (`resolve_type_names`, lines ~228-280)
+  and `lib/librbs/patches/environment.rb` (the Ruby-side patch that
+  delegates into it).
+- **What**: Upstream `RBS::Environment#resolve_type_names`
+  (`vendor/rbs/lib/rbs/environment.rb:522-560`) is a pure function on
+  `self`: it allocates `env = Environment.new`, populates it via
+  `env.add_source(...)`, and returns the new env without touching the
+  receiver. Our patched version returns a freshly allocated Ruby
+  `RBS::Environment` object (matching the *Ruby object* identity
+  contract), but
+  - it mutates the underlying `librbs_core::Environment` **in place**
+    through a raw `*mut` derived from the wrapped `Arc` (see the safety
+    comment around `let env: &mut librbs_core::Environment = unsafe {
+    &mut *env_ptr };`), and
+  - it deliberately reuses the same `WrappedEnvironment` Ruby object on
+    the new env (`dst.@__librbs_handle.equal?(src.@__librbs_handle)`).
+  Net effect: after `dst = src.resolve_type_names`, the caller's `src`
+  and `dst` share the same Arc-backed core env, and any state the
+  resolver wrote (resolved decls, interned names, etc.) is observable
+  through `src` too. Upstream's "self is unchanged" guarantee does not
+  hold.
+- **Why it's tolerable today**: every consumer in this repo (and the
+  upstream call sites we vendored under `vendor/rbs/`) follows the
+  pattern `env = Environment.from_loader(...).resolve_type_names` and
+  immediately discards the pre-resolution env. No code reads the source
+  env after calling `resolve_type_names` on it, so the shared-mutation
+  is invisible in practice. The safety argument in `lib.rs:236-255`
+  also relies on the strong count being 1, which the current
+  `from_loader` path guarantees.
+- **Risk**: A future caller (downstream gem, user script, or a new
+  internal pass) that holds onto the pre-resolution env and expects it
+  to stay un-resolved will see corrupted-looking state. The failure
+  mode is silent — no exception, just diverging behavior between
+  "with librbs" and "without librbs".
+- **Required changes** — pick whichever lands first:
+  - Short-term: in `resolve_type_names`, build a *new*
+    `librbs_core::Environment` (cloning the inputs needed for
+    resolution) instead of mutating the existing one in place, and
+    wrap it in a fresh `WrappedEnvironment` for `dst.@__librbs_handle`.
+    The Ruby-visible contract then matches upstream exactly.
+  - Long-term: subsumed by **Reimplement `RBS::Environment` and
+    `RBS::EnvironmentLoader` in Rust** below — once the core env has
+    proper interior mutability (or the resolver returns a value rather
+    than mutating), this hatch closes naturally.
+- **When**: Before any caller starts retaining the pre-resolution env,
+  and re-check at M3e (materialization adds extra Arc clones, which
+  invalidates the "strong count is 1" half of the current safety
+  argument). Whichever comes first.
+- **Tests**: Add a spec that calls `resolve_type_names` and then asserts
+  the source env still answers as un-resolved (e.g. by snapshotting a
+  canonical dump of `src` before and after, or by checking that
+  `src.@__librbs_handle` is *not* `equal?` to `dst.@__librbs_handle`
+  once the fix lands).
+
 ### Full `Gem::Version` semantics in `librbs-core`
 
 - **Origin**: M2 review.
