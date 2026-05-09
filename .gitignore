@@ -16,3 +16,8 @@ target/
 
 # rspec failure tracking
 .rspec_status
+
+# `bundle binstubs --all` output; only bin/console and bin/setup are tracked.
+/bin/*
+!/bin/console
+!/bin/setup
