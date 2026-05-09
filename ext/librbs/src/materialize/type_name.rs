@@ -27,10 +27,9 @@ use crate::materialize::MaterializeCtx;
 /// `::Foo`); relative names stay relative.
 pub fn materialize_type_name(ctx: &MaterializeCtx<'_>, raw: TypeNameSym) -> Result<Value, Error> {
     let namespace_is_absolute = ctx
-        .env
         .interner
-        .namespaces
-        .lookup(ctx.env.interner.namespace_of(raw))
+        .namespaces()
+        .lookup(ctx.interner.namespace_of(raw))
         .1;
     build_type_name_from_sym(ctx, raw, namespace_is_absolute)
 }
@@ -52,10 +51,9 @@ pub fn materialize_resolved_type_name(
         Some(ResolvedRef::Resolved(sym)) => build_type_name_from_sym(ctx, sym, true),
         Some(ResolvedRef::Unresolved(sym)) => {
             let absolute = ctx
-                .env
                 .interner
-                .namespaces
-                .lookup(ctx.env.interner.namespace_of(sym))
+                .namespaces()
+                .lookup(ctx.interner.namespace_of(sym))
                 .1;
             build_type_name_from_sym(ctx, sym, absolute)
         }
@@ -68,16 +66,16 @@ fn build_type_name_from_sym(
     sym: TypeNameSym,
     mark_absolute: bool,
 ) -> Result<Value, Error> {
-    let interner = &ctx.env.interner;
+    let interner = ctx.interner;
     let (ns_sym, name_sym, _kind) = interner.lookup(sym);
-    let (path_syms, _absolute) = interner.namespaces.lookup(ns_sym);
+    let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
 
     let path_array = ctx.ruby.ary_new();
     for s in path_syms {
-        let seg = interner.symbols.lookup(*s);
+        let seg = interner.symbols().lookup(*s);
         path_array.push(ctx.ruby.to_symbol(seg))?;
     }
-    let leaf = ctx.ruby.to_symbol(interner.symbols.lookup(name_sym));
+    let leaf = ctx.ruby.to_symbol(interner.symbols().lookup(name_sym));
 
     let namespace = ctx
         .classes

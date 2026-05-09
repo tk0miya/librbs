@@ -218,8 +218,7 @@ fn class_instance_type(
         node.name_location(),
         node.args_location(),
     )?;
-    let raw_name =
-        find_type_name_node(ctx.env.interner.frozen(), &node.name()).expect("name pre-interned");
+    let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     let args = build_args_array(ctx, node.args())?;
     Ok(ctx
@@ -239,8 +238,7 @@ fn interface_type(
         node.name_location(),
         node.args_location(),
     )?;
-    let raw_name =
-        find_type_name_node(ctx.env.interner.frozen(), &node.name()).expect("name pre-interned");
+    let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     let args = build_args_array(ctx, node.args())?;
     Ok(ctx
@@ -257,8 +255,7 @@ fn alias_type(ctx: &mut MaterializeCtx<'_>, node: &AliasTypeNode<'_>) -> Result<
         node.name_location(),
         node.args_location(),
     )?;
-    let raw_name =
-        find_type_name_node(ctx.env.interner.frozen(), &node.name()).expect("name pre-interned");
+    let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     let args = build_args_array(ctx, node.args())?;
     Ok(ctx
@@ -278,8 +275,7 @@ fn class_singleton_type(
         node.name_location(),
         node.args_location(),
     )?;
-    let raw_name =
-        find_type_name_node(ctx.env.interner.frozen(), &node.name()).expect("name pre-interned");
+    let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     Ok(ctx
         .classes

@@ -202,9 +202,7 @@ fn process_class_like(
     let ruby_entry = entry_class.new_instance((ruby_name,))?.as_value();
 
     let my_ns = ctx
-        .env
         .interner
-        .frozen()
         .to_namespace(snap.name)
         .expect("class/module namespace pre-interned by insert");
 
@@ -321,7 +319,7 @@ fn process_global(
     hash: &RHash,
     snap: GlobalSnapshot,
 ) -> Result<(), Error> {
-    let name_str = ctx.env.interner.symbols.lookup(snap.name).to_string();
+    let name_str = ctx.interner.symbols().lookup(snap.name).to_string();
     let ruby_name = ctx.ruby.to_symbol(&name_str).as_value();
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Global)?;
@@ -663,7 +661,7 @@ fn materialize_class_alias_node(
     add_required_child(ctx, loc, "eq", &node.eq_location())?;
     add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
 
-    let raw_old = find_type_name_node(ctx.env.interner.frozen(), &node.old_name())
+    let raw_old = find_type_name_node(ctx.interner, &node.old_name())
         .expect("alias old_name pre-interned by insert");
     let old_name_v = materialize_resolved_type_name(ctx, raw_old)?;
 
@@ -693,7 +691,7 @@ fn materialize_module_alias_node(
     add_required_child(ctx, loc, "eq", &node.eq_location())?;
     add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
 
-    let raw_old = find_type_name_node(ctx.env.interner.frozen(), &node.old_name())
+    let raw_old = find_type_name_node(ctx.interner, &node.old_name())
         .expect("alias old_name pre-interned by insert");
     let old_name_v = materialize_resolved_type_name(ctx, raw_old)?;
 
@@ -738,9 +736,7 @@ fn materialize_nested_decl(
             let full_name = full_decl_name(ctx, &c.name(), parent_namespace);
             let ruby_name = materialize_type_name(ctx, full_name)?;
             let inner_ns = ctx
-                .env
                 .interner
-                .frozen()
                 .to_namespace(full_name)
                 .expect("nested class namespace pre-interned by insert");
             materialize_class_node(ctx, ruby_name, c, inner_ns, counter)
@@ -749,9 +745,7 @@ fn materialize_nested_decl(
             let full_name = full_decl_name(ctx, &m.name(), parent_namespace);
             let ruby_name = materialize_type_name(ctx, full_name)?;
             let inner_ns = ctx
-                .env
                 .interner
-                .frozen()
                 .to_namespace(full_name)
                 .expect("nested module namespace pre-interned by insert");
             materialize_module_node(ctx, ruby_name, m, inner_ns, counter)
@@ -805,11 +799,9 @@ fn full_decl_name(
     name_node: &ruby_rbs::node::TypeNameNode<'_>,
     parent_namespace: NamespaceSym,
 ) -> TypeNameSym {
-    let inner = find_type_name_node(ctx.env.interner.frozen(), name_node)
-        .expect("decl name pre-interned by insert");
-    ctx.env
-        .interner
-        .frozen()
+    let inner =
+        find_type_name_node(ctx.interner, name_node).expect("decl name pre-interned by insert");
+    ctx.interner
         .with_prefix(parent_namespace, inner)
         .expect("absolute decl name pre-interned by insert")
 }
@@ -835,7 +827,7 @@ fn class_super(ctx: &mut MaterializeCtx<'_>, sc: &ClassSuperNode<'_>) -> Result<
     add_required_child(ctx, loc, "name", &sc.name_location())?;
     add_optional_child(ctx, loc, "args", sc.args_location().as_ref())?;
 
-    let raw = find_type_name_node(ctx.env.interner.frozen(), &sc.name())
+    let raw = find_type_name_node(ctx.interner, &sc.name())
         .expect("super class name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
     let args = ctx.ruby.ary_new();
@@ -858,7 +850,7 @@ fn module_self(ctx: &mut MaterializeCtx<'_>, ms: &ModuleSelfNode<'_>) -> Result<
     add_required_child(ctx, loc, "name", &ms.name_location())?;
     add_optional_child(ctx, loc, "args", ms.args_location().as_ref())?;
 
-    let raw = find_type_name_node(ctx.env.interner.frozen(), &ms.name())
+    let raw = find_type_name_node(ctx.interner, &ms.name())
         .expect("module self-type name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
     let args = ctx.ruby.ary_new();
