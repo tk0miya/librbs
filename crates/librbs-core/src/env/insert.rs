@@ -44,7 +44,7 @@ fn assign_decl_index(counter: &mut u32, source_index: u32) -> DeclRef {
 /// insert pass (entry registration) and the M3b resolver driver
 /// (recording type-name occurrences) need to perform exactly this
 /// translation, so the shared definition lives here.
-pub(crate) fn intern_type_name_node(
+pub fn intern_type_name_node(
     interner: &mut TypeNameInterner,
     node: &TypeNameNode<'_>,
 ) -> TypeNameSym {

@@ -34,7 +34,7 @@ use ruby_rbs::node::{
 use crate::env::Environment;
 use crate::env::entry::{Context, DeclRef};
 use crate::env::insert::{intern_type_name_node, is_decl_node};
-use crate::env::resolution::{NodeId, Resolution, ResolvedRef};
+use crate::env::resolution::{Resolution, ResolvedRef};
 use crate::env::use_map::{Table, UseMap};
 use crate::interner::{Sym, TypeNameInterner, TypeNameSym};
 use crate::resolver::TypeNameResolver;
@@ -122,7 +122,7 @@ fn resolve_source(
     let mut ctx = WalkCtx {
         source_index,
         decl_counter: 0,
-        type_name_serial: 0,
+        current_decl_ref: None,
         env,
         resolver,
         use_map,
@@ -269,11 +269,13 @@ struct WalkCtx<'env, 'tab> {
     /// Incremented for every visited declaration (top-level or nested).
     /// Matches the sequencing in `env::insert::insert_rbs_source`.
     decl_counter: u32,
-    /// Incremented for every visited type-name occurrence; the value at
-    /// the point of insertion becomes the [`NodeId`] serial. Same scheme
-    /// is reproduced by the canonical dumper so resolutions can be
-    /// looked up by re-running the walk.
-    type_name_serial: u32,
+    /// The [`DeclRef`] currently being walked. Set by
+    /// [`walk_declaration`] on entry and restored on exit so nested
+    /// decls push to their own resolution slice rather than the
+    /// outer's. `None` only at top level before the first decl, where
+    /// no [`record_type_name`] call should ever fire (top-level walks
+    /// dispatch into a decl arm immediately).
+    current_decl_ref: Option<DeclRef>,
     env: &'env mut Environment,
     resolver: &'env mut TypeNameResolver,
     use_map: UseMap<'tab>,
@@ -288,12 +290,6 @@ impl WalkCtx<'_, '_> {
             source_index: self.source_index,
             decl_index,
         }
-    }
-
-    fn next_node_id(&mut self) -> NodeId {
-        let serial = self.type_name_serial;
-        self.type_name_serial += 1;
-        NodeId::new(self.source_index, serial)
     }
 }
 
@@ -312,8 +308,10 @@ fn record_type_name(ctx: &mut WalkCtx<'_, '_>, raw: TypeNameSym, context: &Conte
         Some(sym) => ResolvedRef::Resolved(sym),
         None => ResolvedRef::Unresolved(mapped),
     };
-    let id = ctx.next_node_id();
-    ctx.resolution.record(id, entry);
+    let decl_ref = ctx
+        .current_decl_ref
+        .expect("record_type_name called outside any decl walk — driver invariant violation");
+    ctx.resolution.record(decl_ref, entry);
 }
 
 /// Apply one parsed `# use ...` directive to the [`UseMap`]. Mirrors
@@ -367,7 +365,8 @@ fn apply_use_wildcard_clause(
 /// `resolve_declaration` — environment.rb:577-711. Each Ruby `when`
 /// branch maps to one Rust match arm.
 fn walk_declaration(ctx: &mut WalkCtx<'_, '_>, decl: &Node<'_>, context: &Context) {
-    let _ = ctx.next_decl_ref();
+    let decl_ref = ctx.next_decl_ref();
+    let prev_decl_ref = ctx.current_decl_ref.replace(decl_ref);
     match decl {
         // environment.rb:578-587 — Global. type only; no rename-to-prefix.
         Node::Global(g) => {
@@ -401,6 +400,7 @@ fn walk_declaration(ctx: &mut WalkCtx<'_, '_>, decl: &Node<'_>, context: &Contex
         }
         _ => {}
     }
+    ctx.current_decl_ref = prev_decl_ref;
 }
 
 fn walk_class(ctx: &mut WalkCtx<'_, '_>, c: &ClassNode<'_>, outer_context: &Context) {

@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 magnus = { version = "0.8.2" }
 rb-sys = { version = "0.9", features = ["stable-api-compiled-fallback"] }
 librbs-core = { path = "../../crates/librbs-core" }
+ruby-rbs = "0.3"
 rustc-hash = "2"
 
 [build-dependencies]

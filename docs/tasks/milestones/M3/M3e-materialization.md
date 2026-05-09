@@ -1,4 +1,4 @@
-# M3e: Materialization plumbing (location, type_name, walk skeleton)
+# M3e: Materialization plumbing (location, type_name)
 
 ## Goal
 
@@ -9,15 +9,43 @@ end of this slice we have:
 - `ext/librbs/src/materialize/` exists with `mod.rs`, `location.rs`,
   `type_name.rs`,
 - a `MaterializeCtx` that bundles per-source state (cached
-  `RBS::Buffer`, `Resolution` lookup, `NodeId` walker),
-- a deterministic NodeId scheme that **matches the resolver driver's
-  walk order** so future slices can look type-name occurrences up by
-  position,
+  `RBS::Buffer`, `Resolution` lookup, per-decl resolution cursor),
 - correct byte → character offset translation backed by the upstream
   `RBS::Location` API,
 - `Librbs::Native.materialize_all` is **declared and registered** but
   no-ops (returns `nil`) — the `*_decls` accessors stay unpatched, so
   M3a–M3d functionality is unchanged.
+
+### Note on the resolution side-table
+
+While implementing M3e the original `(source_index, serial)`-keyed
+`NodeId` scheme (sketched in M3a/M3b) was replaced by per-`DeclRef`
+storage:
+
+```rust
+pub struct Resolution {
+    entries: FxHashMap<DeclRef, Vec<ResolvedRef>>,
+}
+```
+
+(`record(decl_ref, resolved)` writes, `get(decl_ref)` reads.)
+
+The materializer iterates `env.*_decls`, looks each entry's `DeclRef`
+up via `lookup_decl`, and walks the AST subtree pulling `ResolvedRef`s
+from `Resolution::get(decl_ref)` in pre-order. Walking the source again
+from the start to reproduce a global serial is unnecessary — `*_decls`
+is already organized by entry, so resolutions live alongside that
+organization.
+
+### Walker drift
+
+The M3f-h materializer writes its own AST walker that must visit
+type-name occurrences in the same pre-order as
+`resolver::driver::record_type_name`. Drift surfaces as a
+canonical-dump compat failure in M3h. The broader concern of
+"compile-time exhaustive matching catches missed AST variants" is
+tracked under followups.md "Wildcard `_ =>` arms in
+`resolver/driver.rs` defeat exhaustiveness".
 
 Splitting the original M3e into M3e/M3f/M3g/M3h is the result of the
 PR-#10 retrospective: a single slice that covers every AST variant
@@ -47,7 +75,7 @@ independently, with the cut-over happening only at M3h.
 `MaterializeCtx` carries everything per-source materialization needs:
 
 ```rust
-pub(crate) struct MaterializeCtx<'a> {
+pub struct MaterializeCtx<'a> {
     pub ruby: &'a Ruby,
     pub env: &'a librbs_core::Environment,
     pub resolution: Option<&'a Resolution>,
@@ -56,12 +84,13 @@ pub(crate) struct MaterializeCtx<'a> {
     /// source so all locations share the same backing object —
     /// upstream RBS uses Buffer identity in some equality checks.
     buffer: Option<Value>,
-    /// NodeId serial. Incremented per type-name occurrence in the
-    /// same pre-order as `resolver::driver::record_type_name`, so
-    /// the value at the point of materialization equals the value
-    /// the driver wrote into `Resolution`. Any drift here breaks
-    /// every later slice's resolution lookup.
-    node_serial: u32,
+    /// Slice of `ResolvedRef`s for the decl currently being walked.
+    /// Set via `enter_decl(decl_ref)` before walking the decl's AST
+    /// subtree; `pull_resolution()` consumes from it in pre-order.
+    /// `None` when the env was never resolved or when the decl was
+    /// skipped during resolution (`only:` / magic comment).
+    current_resolutions: Option<&'a [ResolvedRef]>,
+    cursor: usize,
     /// Pre-resolved Ruby class refs (`RBS::TypeName`, `RBS::Buffer`,
     /// `RBS::Location`, `Pathname`, …) so we don't `eval` per call.
     pub classes: ClassRefs,
@@ -91,12 +120,15 @@ repeating `ruby.eval("RBS::…")` on every node.
   call `absolute!` if the namespace is absolute. Reads the
   `TypeNameInterner` for namespace path + leaf name + kind tag.
 - `materialize_resolved_type_name(ctx, raw: TypeNameSym) -> Value` —
-  the variant that consumes `Resolution`:
-  - `Resolution::None` (env was never resolved) → use `raw` as-is.
+  the variant that consumes `Resolution`. Pulls the next `ResolvedRef`
+  from `ctx.pull_resolution()`:
+  - `None` (env unresolved, decl skipped, or cursor exhausted) → use
+    `raw` as-is, no `absolute!`.
   - `Resolved(sym)` → build from `sym`, mark `absolute!`.
   - `Unresolved(sym)` → build from `sym`, **do not** mark
     `absolute!` (matches upstream's `|| type_name` behavior).
-  - Each call advances `ctx.node_serial`.
+  The caller is responsible for invoking `ctx.enter_decl(decl_ref)`
+  before walking each decl's subtree.
 
 ### Test entry points (temporary)
 
@@ -143,16 +175,18 @@ the test entries.
 
 ## Acceptance
 
-- [ ] `materialize/{mod,location,type_name}.rs` exist and compile.
-- [ ] `MaterializeCtx`'s NodeId scheme produces the same serial values
-      that `resolver::driver` writes to `Resolution`, verified by a
-      cargo test that walks both and compares (no Ruby needed).
-- [ ] Multi-byte regression fixture: pure RBS' `RBS::Location` for
+- [x] `materialize/{mod,location,type_name}.rs` exist and compile.
+- [x] `Resolution` is keyed by `DeclRef` with per-decl
+      `Vec<ResolvedRef>`; `MaterializeCtx` exposes
+      `enter_decl(decl_ref)` + `pull_resolution()` so the M3f-h
+      materializer can consume resolutions in pre-order while walking
+      a decl's AST subtree.
+- [x] Multi-byte regression fixture: pure RBS' `RBS::Location` for
       `Foo` in `spec/fixtures/multibyte.rbs` matches the location the
       M3e helper produces.
-- [ ] `Librbs::Native.materialize_all(env)` exists and is idempotent
+- [x] `Librbs::Native.materialize_all(env)` exists and is idempotent
       (no-op for now).
-- [ ] All M3a–M3d specs green; canonical-dump compat specs remain
+- [x] All M3a–M3d specs green; canonical-dump compat specs remain
       `pending` (unblocked at M3h).
 
 ## References
@@ -160,6 +194,8 @@ the test entries.
 - `vendor/rbs/lib/rbs/location.rb`
 - `vendor/rbs/lib/rbs/buffer.rb`
 - `vendor/rbs/lib/rbs/type_name.rb`
-- `crates/librbs-core/src/resolver/driver.rs` (NodeId walk order)
+- `crates/librbs-core/src/resolver/driver.rs` (per-DeclRef recording)
 - `crates/librbs-core/src/env/resolution.rs`
 - M2 followup: "Byte ↔ character offset bridge for `RBS::Location`"
+- M3b followup: "Wildcard `_ =>` arms in `resolver/driver.rs` defeat
+  exhaustiveness" — broader compile-time guard for AST coverage

@@ -1,0 +1,6 @@
+# 日本語コメント — multi-byte regression for materialize/location.
+# The leading line forces start_pos to fall past several multi-byte
+# characters, so any byte-vs-character mix-up turns into a column drift
+# we can detect by comparison with pure-RBS' RBS::Buffer.pos_to_loc.
+class Foo
+end
