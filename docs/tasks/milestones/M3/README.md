@@ -1,7 +1,7 @@
 # M3 Subtask Index
 
 M3 (the "main milestone") is too large to deliver in a single session. It is
-split into the ten self-contained slices below. Each slice is intended to
+split into the eleven self-contained slices below. Each slice is intended to
 land as one PR and to be picked up by a fresh agent session.
 
 The parent design document is
@@ -20,7 +20,8 @@ acceptance criteria that the slices collectively satisfy.
 | [M3f](M3f-types-and-type-params.md) | `RBS::Types::*` + `RBS::AST::TypeParam` | M3e |
 | [M3g](M3g-method-types-and-members.md) | `RBS::MethodType` + `RBS::AST::Members::*` | M3f |
 | [M3h](M3h-decls-and-cutover.md) | `RBS::AST::Declarations::*` + `Environment::*Entry` + `materialize_all` cut-over + accessor patches | M3g |
-| [M3i](M3i-patches-and-compat.md) | Patches polish + core+stdlib + major-gems compat matrix | M3h |
+| [M3k](M3k-source-and-directive-parity.md) | `Environment#sources` / `#declarations` / directive parity (close upstream divergence on source-derived APIs) | M3h |
+| [M3i](M3i-patches-and-compat.md) | Patches polish + core+stdlib + major-gems compat matrix | M3k |
 | [M3j](M3j-writer-based-tests.md) | Replace per-piece materialize/resolve helpers with `RBS::Writer`-based per-decl text oracle | M3i |
 
 The original M3 plan had a single materialization slice (old M3e) covering
@@ -30,6 +31,13 @@ M3a–M3d entirely) split it into M3e/M3f/M3g/M3h so each AST layer can be
 designed, reviewed, and unit-tested independently. The cut-over to the
 patched accessors lands only at M3h.
 
+M3k was added late, after the M3h design surfaced that the "single lazy
+boundary" only covered the six `*_decls` accessors and left
+`Environment#sources` / `#declarations` / `each_*_source` diverging from
+upstream. M3k closes that gap before the compat matrix in M3i runs, so
+divergence on source-derived APIs is not papered over by an
+`*_decls`-only canonical-dump check.
+
 ## Acceptance mapping
 
 The six acceptance checkboxes in the parent M3 doc are satisfied as follows:
@@ -38,6 +46,7 @@ The six acceptance checkboxes in the parent M3 doc are satisfied as follows:
 |---|---|
 | All `cargo test -p librbs-core` tests are green | M3a, M3b |
 | Canonical dumps for core only match pure RBS exactly | M3h (Ruby-side helper exists from M3c, but needs materialization to walk a populated env) and verified again at M3i |
+| `Environment#sources` / `#declarations` parity with upstream | M3k |
 | Canonical dumps for core + stdlib match pure RBS exactly | M3i |
 | Major-gems matrix is green | M3i |
 | `from_loader` / `resolve_type_names` native paths never call Ruby | M3d (initial), re-audited at M3i now that materialization adds Ruby-call surface |
