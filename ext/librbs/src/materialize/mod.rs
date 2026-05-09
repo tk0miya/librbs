@@ -17,9 +17,11 @@ use librbs_core::env::resolution::{Resolution, ResolvedRef};
 use librbs_core::interner::FrozenInterner;
 
 pub mod decl;
+pub mod directive;
 pub mod location;
 pub mod member;
 pub mod method_type;
+pub mod source;
 pub mod type_;
 pub mod type_name;
 pub mod type_param;
@@ -95,6 +97,16 @@ pub struct ClassRefs {
     pub entry_global: RClass,
     pub entry_class_alias: RClass,
     pub entry_module_alias: RClass,
+    pub directives_use: RClass,
+    pub directives_use_single_clause: RClass,
+    pub directives_use_wildcard_clause: RClass,
+    pub directives_resolve_type_names: RClass,
+    pub source_rbs: RClass,
+    /// Reserved for M5's Ruby-source path (loader does not produce Ruby
+    /// sources today). Kept here so the M5 add_source patch only needs
+    /// to wire dispatch, not class lookup.
+    #[allow(dead_code)]
+    pub source_ruby: RClass,
 }
 
 impl ClassRefs {
@@ -166,6 +178,12 @@ impl ClassRefs {
             entry_global: ruby.eval("RBS::Environment::GlobalEntry")?,
             entry_class_alias: ruby.eval("RBS::Environment::ClassAliasEntry")?,
             entry_module_alias: ruby.eval("RBS::Environment::ModuleAliasEntry")?,
+            directives_use: ruby.eval("RBS::AST::Directives::Use")?,
+            directives_use_single_clause: ruby.eval("RBS::AST::Directives::Use::SingleClause")?,
+            directives_use_wildcard_clause: ruby.eval("RBS::AST::Directives::Use::WildcardClause")?,
+            directives_resolve_type_names: ruby.eval("RBS::AST::Directives::ResolveTypeNames")?,
+            source_rbs: ruby.eval("RBS::Source::RBS")?,
+            source_ruby: ruby.eval("RBS::Source::Ruby")?,
         })
     }
 }

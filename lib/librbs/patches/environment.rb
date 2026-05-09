@@ -25,11 +25,21 @@ module Librbs
       # ivar reader. `super()` ends up reading the
       # `RBS::Environment::ClassEntry` etc. hash that
       # `Librbs::Native.materialize_all` just wrote onto the instance.
+      # M3k extends the trigger to the source-derived APIs as well so
+      # `env.sources` / `env.declarations` materialize before reading.
       %i[class_decls interface_decls type_alias_decls
-         constant_decls class_alias_decls global_decls].each do |m|
+         constant_decls class_alias_decls global_decls
+         sources declarations].each do |m|
         define_method(m) do
           ensure_materialized
           super()
+        end
+      end
+
+      %i[each_rbs_source each_ruby_source].each do |m|
+        define_method(m) do |&block|
+          ensure_materialized
+          super(&block)
         end
       end
 

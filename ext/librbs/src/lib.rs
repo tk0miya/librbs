@@ -326,6 +326,25 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
 
     let hashes = materialize::decl::build_entries(&mut ctx)?;
 
+    // Build the `@sources` array. Each source contributes one
+    // `RBS::Source::RBS` whose `declarations` reuse the Ruby decl
+    // values stitched into the entries above (preserving the M3k
+    // intra-env identity invariant).
+    let sources_ary = ruby.ary_new();
+    for (idx, src) in env.sources.iter().enumerate() {
+        let src_idx = idx as u32;
+        ctx.set_source(src_idx);
+        let directives = materialize::directive::build_directives(&mut ctx, src)?;
+        let decls_ary = ruby.ary_new();
+        materialize::decl::for_each_top_level_decl_ref(src, src_idx, |decl_ref| {
+            if let Some(v) = hashes.top_level_decls.get(&decl_ref) {
+                let _ = decls_ary.push(*v);
+            }
+        });
+        let source_value = materialize::source::build_source(&mut ctx, src, directives, decls_ary)?;
+        sources_ary.push(source_value)?;
+    }
+
     ivar_set(env_ruby, "@class_decls", hashes.class_decls.as_value())?;
     ivar_set(
         env_ruby,
@@ -348,6 +367,7 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
         hashes.class_alias_decls.as_value(),
     )?;
     ivar_set(env_ruby, "@global_decls", hashes.global_decls.as_value())?;
+    ivar_set(env_ruby, "@sources", sources_ary.as_value())?;
     ivar_set(env_ruby, "@__librbs_materialized", ruby.qtrue().as_value())?;
 
     Ok(ruby.qnil().as_value())

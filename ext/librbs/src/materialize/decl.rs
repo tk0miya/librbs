@@ -15,6 +15,7 @@
 //! `resolve_type_names` recorded during resolution.
 
 use magnus::{Error, IntoValue, RHash, Value, kwargs, prelude::*, value::ReprValue};
+use rustc_hash::FxHashMap;
 
 use librbs_core::Source;
 use librbs_core::env::entry::{ClassAliasLikeEntry, ClassLikeEntry, Context, DeclRef};
@@ -43,6 +44,13 @@ pub struct EntryHashes {
     pub constant_decls: RHash,
     pub class_alias_decls: RHash,
     pub global_decls: RHash,
+    /// Map of `(source_index, decl_index)` → Ruby decl `Value` for
+    /// every **top-level** decl materialized into the entries above.
+    /// `materialize_all` consumes this to populate each
+    /// `RBS::Source::RBS#declarations` array in source pre-order while
+    /// preserving Ruby object identity with the entry-side decl values
+    /// (the M3k identity invariant).
+    pub top_level_decls: FxHashMap<DeclRef, Value>,
 }
 
 /// Walk every entry in `env.*_decls` and build the matching Ruby
@@ -52,13 +60,14 @@ pub struct EntryHashes {
 /// re-traversal.
 pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error> {
     let ruby = ctx.ruby;
-    let hashes = EntryHashes {
+    let mut hashes = EntryHashes {
         class_decls: ruby.hash_new(),
         interface_decls: ruby.hash_new(),
         type_alias_decls: ruby.hash_new(),
         constant_decls: ruby.hash_new(),
         class_alias_decls: ruby.hash_new(),
         global_decls: ruby.hash_new(),
+        top_level_decls: FxHashMap::default(),
     };
 
     // Snapshot each entry hash up front so iteration doesn't keep a
@@ -79,7 +88,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in class_snapshots {
-        process_class_like(ctx, &hashes.class_decls, snap)?;
+        process_class_like(ctx, &mut hashes, snap)?;
     }
 
     let interface_snapshots: Vec<SingleSnapshot> = ctx
@@ -93,7 +102,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in interface_snapshots {
-        process_interface(ctx, &hashes.interface_decls, snap)?;
+        process_interface(ctx, &mut hashes, snap)?;
     }
 
     let type_alias_snapshots: Vec<SingleSnapshot> = ctx
@@ -107,7 +116,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in type_alias_snapshots {
-        process_type_alias(ctx, &hashes.type_alias_decls, snap)?;
+        process_type_alias(ctx, &mut hashes, snap)?;
     }
 
     let constant_snapshots: Vec<SingleSnapshot> = ctx
@@ -121,7 +130,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in constant_snapshots {
-        process_constant(ctx, &hashes.constant_decls, snap)?;
+        process_constant(ctx, &mut hashes, snap)?;
     }
 
     let class_alias_snapshots: Vec<ClassAliasSnapshot> = ctx
@@ -140,7 +149,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in class_alias_snapshots {
-        process_class_alias(ctx, &hashes.class_alias_decls, snap)?;
+        process_class_alias(ctx, &mut hashes, snap)?;
     }
 
     let global_snapshots: Vec<GlobalSnapshot> = ctx
@@ -154,7 +163,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in global_snapshots {
-        process_global(ctx, &hashes.global_decls, snap)?;
+        process_global(ctx, &mut hashes, snap)?;
     }
 
     Ok(hashes)
@@ -190,7 +199,7 @@ struct GlobalSnapshot {
 
 fn process_class_like(
     ctx: &mut MaterializeCtx<'_>,
-    hash: &RHash,
+    hashes: &mut EntryHashes,
     snap: ClassLikeSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
@@ -209,24 +218,30 @@ fn process_class_like(
     for (rust_ctx, decl_ref) in snap.context_decls {
         let ruby_ctx = build_ruby_context(ctx, &rust_ctx)?;
         let ruby_decl = materialize_class_or_module_decl(ctx, ruby_name, decl_ref, my_ns)?;
+        if rust_ctx.is_empty() {
+            hashes.top_level_decls.insert(decl_ref, ruby_decl);
+        }
         let pair = ctx.ruby.ary_new_capa(2);
         pair.push(ruby_ctx)?;
         pair.push(ruby_decl)?;
         let _: Value = ruby_entry.funcall("<<", (pair.as_value().into_value_with(ctx.ruby),))?;
     }
 
-    hash.aset(ruby_name, ruby_entry)?;
+    hashes.class_decls.aset(ruby_name, ruby_entry)?;
     Ok(())
 }
 
 fn process_interface(
     ctx: &mut MaterializeCtx<'_>,
-    hash: &RHash,
+    hashes: &mut EntryHashes,
     snap: SingleSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Interface)?;
+    if snap.context.is_empty() {
+        hashes.top_level_decls.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_interface
@@ -236,18 +251,21 @@ fn process_interface(
             "context" => ruby_ctx
         ),))?
         .as_value();
-    hash.aset(ruby_name, entry)?;
+    hashes.interface_decls.aset(ruby_name, entry)?;
     Ok(())
 }
 
 fn process_type_alias(
     ctx: &mut MaterializeCtx<'_>,
-    hash: &RHash,
+    hashes: &mut EntryHashes,
     snap: SingleSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::TypeAlias)?;
+    if snap.context.is_empty() {
+        hashes.top_level_decls.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_type_alias
@@ -257,18 +275,21 @@ fn process_type_alias(
             "context" => ruby_ctx
         ),))?
         .as_value();
-    hash.aset(ruby_name, entry)?;
+    hashes.type_alias_decls.aset(ruby_name, entry)?;
     Ok(())
 }
 
 fn process_constant(
     ctx: &mut MaterializeCtx<'_>,
-    hash: &RHash,
+    hashes: &mut EntryHashes,
     snap: SingleSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Constant)?;
+    if snap.context.is_empty() {
+        hashes.top_level_decls.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_constant
@@ -278,13 +299,13 @@ fn process_constant(
             "context" => ruby_ctx
         ),))?
         .as_value();
-    hash.aset(ruby_name, entry)?;
+    hashes.constant_decls.aset(ruby_name, entry)?;
     Ok(())
 }
 
 fn process_class_alias(
     ctx: &mut MaterializeCtx<'_>,
-    hash: &RHash,
+    hashes: &mut EntryHashes,
     snap: ClassAliasSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
@@ -295,6 +316,9 @@ fn process_class_alias(
         NodeKind::ModuleAlias
     };
     let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, kind)?;
+    if snap.context.is_empty() {
+        hashes.top_level_decls.insert(snap.decl, ruby_decl);
+    }
     let entry_class = if snap.is_class {
         ctx.classes.entry_class_alias
     } else {
@@ -307,7 +331,7 @@ fn process_class_alias(
             "context" => ruby_ctx
         ),))?
         .as_value();
-    hash.aset(ruby_name, entry)?;
+    hashes.class_alias_decls.aset(ruby_name, entry)?;
     // `old_name` is only used by the resolver / type checker through
     // the decl itself; the entry exposes it via `entry.decl.old_name`.
     let _ = snap.old_name;
@@ -316,13 +340,16 @@ fn process_class_alias(
 
 fn process_global(
     ctx: &mut MaterializeCtx<'_>,
-    hash: &RHash,
+    hashes: &mut EntryHashes,
     snap: GlobalSnapshot,
 ) -> Result<(), Error> {
     let name_str = ctx.interner.symbols().lookup(snap.name).to_string();
     let ruby_name = ctx.ruby.to_symbol(&name_str).as_value();
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Global)?;
+    if snap.context.is_empty() {
+        hashes.top_level_decls.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_global
@@ -332,7 +359,7 @@ fn process_global(
             "context" => ruby_ctx
         ),))?
         .as_value();
-    hash.aset(ruby_name, entry)?;
+    hashes.global_decls.aset(ruby_name, entry)?;
     Ok(())
 }
 
@@ -408,6 +435,49 @@ fn materialize_class_or_module_decl(
 fn source_ref<'a>(ctx: &MaterializeCtx<'a>, index: u32) -> &'a Source {
     let ptr: *const Source = &ctx.env.sources[index as usize];
     unsafe { &*ptr }
+}
+
+/// Walk a source's top-level declarations in source pre-order, calling
+/// `visit` for each one with the [`DeclRef`] that
+/// [`crate::env::insert::insert_rbs_source`] (and the resolver driver)
+/// assigned to it. The counter advances over nested decls so the
+/// indices match exactly — this is the same numbering scheme as
+/// `consume_decl_ref` in `resolver::driver`.
+pub fn for_each_top_level_decl_ref<F: FnMut(DeclRef)>(
+    src: &Source,
+    source_index: u32,
+    mut visit: F,
+) {
+    let mut counter: u32 = 0;
+    for decl in src.parser.signature().declarations().iter() {
+        let decl_ref = DeclRef {
+            source_index,
+            decl_index: counter,
+        };
+        visit(decl_ref);
+        advance_counter(&decl, &mut counter);
+    }
+}
+
+fn advance_counter(node: &Node<'_>, counter: &mut u32) {
+    *counter += 1;
+    match node {
+        Node::Class(c) => {
+            for member in c.members().iter() {
+                if is_decl_node(&member) {
+                    advance_counter(&member, counter);
+                }
+            }
+        }
+        Node::Module(m) => {
+            for member in m.members().iter() {
+                if is_decl_node(&member) {
+                    advance_counter(&member, counter);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------- per-AST-node materializers ----------

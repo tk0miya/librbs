@@ -251,21 +251,21 @@ with M3h's `object_spec.rb`):
 
 ## Acceptance
 
-- [ ] `env.sources` returns a populated `Array[RBS::Source::RBS]`
+- [x] `env.sources` returns a populated `Array[RBS::Source::RBS]`
       after the first `*_decls` (or any sources-derived) access.
-- [ ] `env.declarations.size` and shape matches a pure-RBS subprocess
+- [x] `env.declarations.size` and shape matches a pure-RBS subprocess
       for the curated fixture set.
-- [ ] Object-identity invariant holds within one env:
+- [x] Object-identity invariant holds within one env:
       `source.declarations[i].equal?(class_decls[name].decls[j].decl)`.
-- [ ] `each_rbs_source` / `each_ruby_source` patches trigger
+- [x] `each_rbs_source` / `each_ruby_source` patches trigger
       materialization and yield the correct sources.
-- [ ] Directive materializer covers `Use` (both clause kinds) and
+- [x] Directive materializer covers `Use` (both clause kinds) and
       `ResolveTypeNames`; round-trip tests pass.
-- [ ] Re-entrancy: `materialize_all` twice still a no-op; sources
+- [x] Re-entrancy: `materialize_all` twice still a no-op; sources
       array identity preserved across repeated accessor calls.
-- [ ] Pure-Ruby `RBS::Environment.new` path remains untouched (no
+- [x] Pure-Ruby `RBS::Environment.new` path remains untouched (no
       `@__librbs_handle` → accessors fall through to `super()`).
-- [ ] CI green.
+- [x] CI green.
 
 ## References
 
