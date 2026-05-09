@@ -6,7 +6,13 @@ members = [
 ]
 # Keep our workspace from picking up vendor/rbs/rust/Cargo.toml's nested
 # workspace. We depend on vendor crates as path dependencies instead.
-exclude = ["vendor"]
+exclude = ["vendor", "crates/ruby-rbs-local"]
 
 [profile.release]
 debug = true
+
+# Local fork of ruby-rbs 0.3.0 that adds start_char()/end_char() accessors on
+# RBSLocationRange. Remove this block (and the crates/ruby-rbs-local directory)
+# once upstream ruby-rbs ships char-position accessors.
+[patch.crates-io]
+ruby-rbs = { path = "crates/ruby-rbs-local" }
