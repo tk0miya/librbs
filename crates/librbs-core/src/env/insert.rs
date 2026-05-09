@@ -1,4 +1,7 @@
-use ruby_rbs::node::{Node, SignatureNode, TypeNameNode};
+use ruby_rbs::node::{
+    BlockTypeNode, ClassNode, FunctionTypeNode, InterfaceNode, MethodTypeNode, ModuleNode, Node,
+    NodeList, ProcTypeNode, RecordTypeNode, SignatureNode, TypeNameNode,
+};
 
 use crate::env::Environment;
 use crate::env::entry::{
@@ -60,6 +63,217 @@ pub(crate) fn intern_type_name_node(
     interner.intern(ns, name, kind)
 }
 
+// ----- reference-interning walkers -----
+//
+// These mirror the per-decl AST traversal in `resolver::driver` but only
+// intern each type-name reference; resolution itself is left to the
+// resolve phase. By the time `insert_rbs_source` returns, every
+// `TypeNameNode` reachable from a declaration body — super-classes,
+// self-types, mixins, method types, type aliases' bodies, etc. — has
+// been added to `env.interner`, which lets the resolver run later
+// against an immutable interner. `# use` directives are intentionally
+// skipped: their wildcard form is only meaningful after every other
+// decl is known, so they remain the resolver's responsibility.
+
+fn intern_class_refs(interner: &mut TypeNameInterner, c: &ClassNode<'_>) {
+    intern_type_params(interner, &c.type_params());
+    if let Some(sc) = c.super_class() {
+        let _ = intern_type_name_node(interner, &sc.name());
+        for arg in sc.args().iter() {
+            intern_type(interner, &arg);
+        }
+    }
+}
+
+fn intern_module_refs(interner: &mut TypeNameInterner, m: &ModuleNode<'_>) {
+    intern_type_params(interner, &m.type_params());
+    for st in m.self_types().iter() {
+        if let Node::ModuleSelf(ms) = &st {
+            let _ = intern_type_name_node(interner, &ms.name());
+            for arg in ms.args().iter() {
+                intern_type(interner, &arg);
+            }
+        }
+    }
+}
+
+fn intern_interface_refs(interner: &mut TypeNameInterner, i: &InterfaceNode<'_>) {
+    intern_type_params(interner, &i.type_params());
+    for member in i.members().iter() {
+        intern_member(interner, &member);
+    }
+}
+
+fn intern_member(interner: &mut TypeNameInterner, member: &Node<'_>) {
+    match member {
+        Node::MethodDefinition(m) => {
+            for overload in m.overloads().iter() {
+                if let Node::MethodDefinitionOverload(o) = &overload
+                    && let Node::MethodType(mt) = o.method_type()
+                {
+                    intern_method_type(interner, &mt);
+                }
+            }
+        }
+        Node::AttrAccessor(a) => intern_type(interner, &a.type_()),
+        Node::AttrReader(a) => intern_type(interner, &a.type_()),
+        Node::AttrWriter(a) => intern_type(interner, &a.type_()),
+        Node::InstanceVariable(v) => intern_type(interner, &v.type_()),
+        Node::ClassInstanceVariable(v) => intern_type(interner, &v.type_()),
+        Node::ClassVariable(v) => intern_type(interner, &v.type_()),
+        Node::Include(m) => intern_mixin(interner, &m.name(), m.args().iter()),
+        Node::Extend(m) => intern_mixin(interner, &m.name(), m.args().iter()),
+        Node::Prepend(m) => intern_mixin(interner, &m.name(), m.args().iter()),
+        // Public, Private, Alias carry no type-name occurrences — same
+        // fall-through as `walk_member` in resolver::driver.
+        _ => {}
+    }
+}
+
+fn intern_mixin<'a>(
+    interner: &mut TypeNameInterner,
+    name: &TypeNameNode<'a>,
+    args: impl Iterator<Item = Node<'a>>,
+) {
+    let _ = intern_type_name_node(interner, name);
+    for arg in args {
+        intern_type(interner, &arg);
+    }
+}
+
+fn intern_method_type(interner: &mut TypeNameInterner, mt: &MethodTypeNode<'_>) {
+    intern_type_params(interner, &mt.type_params());
+    intern_type(interner, &mt.type_());
+    if let Some(block) = mt.block() {
+        intern_block(interner, &block);
+    }
+}
+
+fn intern_block(interner: &mut TypeNameInterner, b: &BlockTypeNode<'_>) {
+    intern_type(interner, &b.type_());
+    if let Some(self_t) = b.self_type() {
+        intern_type(interner, &self_t);
+    }
+}
+
+fn intern_type_params(interner: &mut TypeNameInterner, params: &NodeList<'_>) {
+    for p in params.iter() {
+        if let Node::TypeParam(tp) = &p {
+            if let Some(ub) = tp.upper_bound() {
+                intern_type(interner, &ub);
+            }
+            if let Some(lb) = tp.lower_bound() {
+                intern_type(interner, &lb);
+            }
+            if let Some(dt) = tp.default_type() {
+                intern_type(interner, &dt);
+            }
+        }
+    }
+}
+
+fn intern_type(interner: &mut TypeNameInterner, ty: &Node<'_>) {
+    match ty {
+        Node::ClassInstanceType(t) => {
+            let _ = intern_type_name_node(interner, &t.name());
+            for arg in t.args().iter() {
+                intern_type(interner, &arg);
+            }
+        }
+        Node::InterfaceType(t) => {
+            let _ = intern_type_name_node(interner, &t.name());
+            for arg in t.args().iter() {
+                intern_type(interner, &arg);
+            }
+        }
+        Node::AliasType(t) => {
+            let _ = intern_type_name_node(interner, &t.name());
+            for arg in t.args().iter() {
+                intern_type(interner, &arg);
+            }
+        }
+        Node::ClassSingletonType(t) => {
+            let _ = intern_type_name_node(interner, &t.name());
+        }
+        Node::TupleType(t) => {
+            for el in t.types().iter() {
+                intern_type(interner, &el);
+            }
+        }
+        Node::UnionType(t) => {
+            for el in t.types().iter() {
+                intern_type(interner, &el);
+            }
+        }
+        Node::IntersectionType(t) => {
+            for el in t.types().iter() {
+                intern_type(interner, &el);
+            }
+        }
+        Node::RecordType(t) => intern_record_type(interner, t),
+        Node::OptionalType(t) => intern_type(interner, &t.type_()),
+        Node::ProcType(t) => intern_proc_type(interner, t),
+        Node::FunctionType(t) => intern_function_type(interner, t),
+        Node::UntypedFunctionType(t) => intern_type(interner, &t.return_type()),
+        Node::BlockType(b) => intern_block(interner, b),
+        Node::RecordFieldType(f) => intern_type(interner, &f.type_()),
+        // Literal / Variable / Bool / Void / Any / Nil / Top / Bottom /
+        // Self / Instance / Class — none carry resolvable type names.
+        _ => {}
+    }
+}
+
+fn intern_record_type(interner: &mut TypeNameInterner, t: &RecordTypeNode<'_>) {
+    for (_, value) in t.all_fields().iter() {
+        if let Node::RecordFieldType(f) = &value {
+            intern_type(interner, &f.type_());
+        }
+    }
+}
+
+fn intern_proc_type(interner: &mut TypeNameInterner, t: &ProcTypeNode<'_>) {
+    intern_type(interner, &t.type_());
+    if let Some(b) = t.block() {
+        intern_block(interner, &b);
+    }
+    if let Some(st) = t.self_type() {
+        intern_type(interner, &st);
+    }
+}
+
+fn intern_function_type(interner: &mut TypeNameInterner, t: &FunctionTypeNode<'_>) {
+    for p in t.required_positionals().iter() {
+        intern_function_param(interner, &p);
+    }
+    for p in t.optional_positionals().iter() {
+        intern_function_param(interner, &p);
+    }
+    if let Some(rest) = t.rest_positionals() {
+        intern_function_param(interner, &rest);
+    }
+    for p in t.trailing_positionals().iter() {
+        intern_function_param(interner, &p);
+    }
+    for (_, value) in t.required_keywords().iter() {
+        intern_function_param(interner, &value);
+    }
+    for (_, value) in t.optional_keywords().iter() {
+        intern_function_param(interner, &value);
+    }
+    if let Some(rest) = t.rest_keywords() {
+        intern_function_param(interner, &rest);
+    }
+    intern_type(interner, &t.return_type());
+}
+
+fn intern_function_param(interner: &mut TypeNameInterner, p: &Node<'_>) {
+    if let Node::FunctionParam(fp) = p {
+        intern_type(interner, &fp.type_());
+    } else {
+        intern_type(interner, p);
+    }
+}
+
 fn insert_decl(
     env: &mut Environment,
     source_index: u32,
@@ -94,12 +308,16 @@ fn insert_decl(
                 })
                 .push(context.clone(), decl_ref);
 
+            intern_class_refs(&mut env.interner, c);
+
             let inner_ns = env.interner.to_namespace(name);
             let mut inner_ctx = context.clone();
             inner_ctx.push(name);
             for member in c.members().iter() {
                 if is_decl_node(&member) {
                     insert_decl(env, source_index, counter, &member, &inner_ctx, inner_ns)?;
+                } else {
+                    intern_member(&mut env.interner, &member);
                 }
             }
         }
@@ -126,12 +344,16 @@ fn insert_decl(
                 })
                 .push(context.clone(), decl_ref);
 
+            intern_module_refs(&mut env.interner, m);
+
             let inner_ns = env.interner.to_namespace(name);
             let mut inner_ctx = context.clone();
             inner_ctx.push(name);
             for member in m.members().iter() {
                 if is_decl_node(&member) {
                     insert_decl(env, source_index, counter, &member, &inner_ctx, inner_ns)?;
+                } else {
+                    intern_member(&mut env.interner, &member);
                 }
             }
         }
@@ -151,6 +373,8 @@ fn insert_decl(
                     decl: decl_ref,
                 },
             );
+
+            intern_interface_refs(&mut env.interner, i);
         }
         Node::TypeAlias(a) => {
             let inner = intern_type_name_node(&mut env.interner, &a.name());
@@ -168,6 +392,9 @@ fn insert_decl(
                     decl: decl_ref,
                 },
             );
+
+            intern_type_params(&mut env.interner, &a.type_params());
+            intern_type(&mut env.interner, &a.type_());
         }
         Node::Constant(c) => {
             let inner = intern_type_name_node(&mut env.interner, &c.name());
@@ -186,6 +413,8 @@ fn insert_decl(
                     decl: decl_ref,
                 },
             );
+
+            intern_type(&mut env.interner, &c.type_());
         }
         Node::Global(g) => {
             let name_node = g.name();
@@ -203,6 +432,8 @@ fn insert_decl(
                     decl: decl_ref,
                 },
             );
+
+            intern_type(&mut env.interner, &g.type_());
         }
         Node::ClassAlias(ca) => {
             let inner = intern_type_name_node(&mut env.interner, &ca.new_name());
@@ -281,4 +512,143 @@ fn check_constant_collision(env: &Environment, name: TypeNameSym) -> Result<()> 
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::ManagedParser;
+
+    fn parse_and_insert(src: &str) -> Environment {
+        let parser = ManagedParser::parse(src.to_string()).unwrap();
+        let mut env = Environment::new();
+        insert_rbs_source(&mut env, 0, parser.signature()).unwrap();
+        env
+    }
+
+    /// After insert, asserts that `name` is already present in the symbol
+    /// interner. We search the symbol table directly so the check stays
+    /// `&Environment` and doesn't risk masking a missing intern by
+    /// allocating fresh.
+    fn assert_symbol_interned(env: &Environment, name: &str) {
+        let total = env.interner.symbols.len();
+        let found = (0..total).any(|i| env.interner.symbols.lookup(Sym(i as u32)) == name);
+        assert!(found, "expected symbol {name:?} to be interned");
+    }
+
+    #[test]
+    fn class_super_class_reference_is_interned() {
+        let env = parse_and_insert("class Bar < Foo end\n");
+        assert_symbol_interned(&env, "Foo");
+    }
+
+    #[test]
+    fn module_self_type_reference_is_interned() {
+        let env = parse_and_insert("module M : _Each end\n");
+        assert_symbol_interned(&env, "_Each");
+    }
+
+    #[test]
+    fn mixin_references_are_interned() {
+        let env =
+            parse_and_insert("class Foo\n  include Mixed\n  extend Hooked\n  prepend Front\nend\n");
+        assert_symbol_interned(&env, "Mixed");
+        assert_symbol_interned(&env, "Hooked");
+        assert_symbol_interned(&env, "Front");
+    }
+
+    #[test]
+    fn method_type_references_are_interned() {
+        let env = parse_and_insert(
+            "class Foo\n  def bar: (Arg) -> Ret\n  def baz: () { (BlockArg) -> BlockRet } -> Yielder\nend\n",
+        );
+        for n in ["Arg", "Ret", "BlockArg", "BlockRet", "Yielder"] {
+            assert_symbol_interned(&env, n);
+        }
+    }
+
+    #[test]
+    fn attr_and_ivar_type_references_are_interned() {
+        let env = parse_and_insert(
+            "class Foo\n  attr_reader name: NameType\n  @count: CountType\n  @@total: TotalType\n  self.@cache: CacheType\nend\n",
+        );
+        for n in ["NameType", "CountType", "TotalType", "CacheType"] {
+            assert_symbol_interned(&env, n);
+        }
+    }
+
+    #[test]
+    fn type_alias_body_references_are_interned() {
+        let env = parse_and_insert("type x = Integer | String\n");
+        assert_symbol_interned(&env, "Integer");
+        assert_symbol_interned(&env, "String");
+    }
+
+    #[test]
+    fn constant_type_reference_is_interned() {
+        let env = parse_and_insert("Pi: Numeric\n");
+        assert_symbol_interned(&env, "Numeric");
+    }
+
+    #[test]
+    fn global_type_reference_is_interned() {
+        let env = parse_and_insert("$logger: Logger\n");
+        assert_symbol_interned(&env, "Logger");
+    }
+
+    #[test]
+    fn interface_method_type_references_are_interned() {
+        let env = parse_and_insert("interface _Each\n  def each: () -> EachReturn\nend\n");
+        assert_symbol_interned(&env, "EachReturn");
+    }
+
+    #[test]
+    fn nested_decls_intern_outer_and_inner_references() {
+        // Inner class references must be interned through the recursive
+        // member walk.
+        let env =
+            parse_and_insert("class Outer < OuterParent\n  class Inner < InnerParent end\nend\n");
+        assert_symbol_interned(&env, "OuterParent");
+        assert_symbol_interned(&env, "InnerParent");
+    }
+
+    #[test]
+    fn type_param_bounds_are_interned() {
+        let env =
+            parse_and_insert("class Foo[T < UpperBoundType] end\ntype y[U < AliasUpper] = U\n");
+        assert_symbol_interned(&env, "UpperBoundType");
+        assert_symbol_interned(&env, "AliasUpper");
+    }
+
+    #[test]
+    fn record_and_tuple_types_are_interned() {
+        let env =
+            parse_and_insert("type r = { name: RecName, age: RecAge }\ntype t = [TupA, TupB]\n");
+        for n in ["RecName", "RecAge", "TupA", "TupB"] {
+            assert_symbol_interned(&env, n);
+        }
+    }
+
+    #[test]
+    fn relative_reference_typename_is_interned_alongside_absolute_lhs() {
+        // `class Foo end` defines ::Foo; `class Bar < Foo` references the
+        // *relative* `Foo`. After insert, both the absolute LHS and the
+        // relative reference must be in the typename interner — re-
+        // interning either does not grow the symbol table or allocate a
+        // new `Sym`.
+        let mut env = parse_and_insert("class Foo end\nclass Bar < Foo end\n");
+        let sym_len_before = env.interner.symbols.len();
+        let foo_sym = env.interner.symbols.intern("Foo");
+        assert_eq!(
+            env.interner.symbols.len(),
+            sym_len_before,
+            "Foo segment should already be interned"
+        );
+
+        let abs_root = env.interner.namespaces.root_absolute();
+        let rel_empty = env.interner.namespaces.empty_relative();
+        let abs_foo = env.interner.intern(abs_root, foo_sym, TypeNameKind::Class);
+        let rel_foo = env.interner.intern(rel_empty, foo_sym, TypeNameKind::Class);
+        assert_ne!(abs_foo, rel_foo, "namespace makes them distinct");
+    }
 }
