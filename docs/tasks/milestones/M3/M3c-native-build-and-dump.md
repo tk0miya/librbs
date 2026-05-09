@@ -162,8 +162,11 @@ leak.
 ## Out of scope (deferred)
 
 - `resolve_type_names` magnus bridge — M3d.
-- `materialize_all` / patches that call `ensure_materialized` — M3e.
-- core+stdlib and gems matrices — M3f.
+- Materialization plumbing — M3e (`MaterializeCtx`, location, type_name).
+- `RBS::Types::*` / `RBS::AST::TypeParam` — M3f.
+- `RBS::MethodType` / `RBS::AST::Members::*` — M3g.
+- `materialize_all` cut-over and `*_decls` accessor patches — M3h.
+- core+stdlib and gems matrices — M3i.
 
 ## Acceptance
 
@@ -177,7 +180,7 @@ leak.
       internal to the compat specs).
 - [x] `spec/compat/canonical_dump_core_spec.rb` exists and is wired up
       to the Ruby dumper on both sides. The librbs-vs-pure comparison
-      is `pending` until M3e materialization lands; the pure-RBS
+      is `pending` until M3h materialization cut-over lands; the pure-RBS
       sanity assertion is green today.
 - [x] `bundle exec rspec` and `cargo test` both green in CI.
 
@@ -188,7 +191,7 @@ leak.
 > "Rust-side `canonical_dump` implementation" followup tracks the
 > trigger that would unfreeze it. As a consequence, the parent M3
 > "canonical dumps for core only match" acceptance row is closed by
-> M3e (once materialization populates `@class_decls`), not by M3c.
+> M3h (once materialization populates `@class_decls`), not by M3c.
 
 ## References
 

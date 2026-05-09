@@ -99,9 +99,10 @@ This satisfies the parent acceptance item:
 
 ## Out of scope (deferred)
 
-- `materialize_all` and AST → Ruby — M3e.
-- core+stdlib / gems matrices — M3f. (Core only is enough for this slice;
-  stdlib often resolves identically but the matrix expansion is M3f.)
+- `materialize_all` and AST → Ruby — M3e (plumbing) / M3f (types) /
+  M3g (members + method types) / M3h (decls + entries + cut-over).
+- core+stdlib / gems matrices — M3i. (Core only is enough for this slice;
+  stdlib often resolves identically but the matrix expansion is M3i.)
 
 ## Acceptance
 

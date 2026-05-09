@@ -1,4 +1,4 @@
-# M3f: Patches polish + full compat matrix
+# M3i: Patches polish + full compat matrix
 
 ## Goal
 
@@ -14,7 +14,7 @@ divergences, and finishes the patch layer.
 
 ## Prerequisites
 
-- M3a + M3b + M3c + M3d + M3e merged.
+- M3a + M3b + M3c + M3d + M3e + M3f + M3g + M3h merged.
 - Read [../M3-environment-and-resolver.md](../M3-environment-and-resolver.md)
   sections "Compatibility tests" and "Test matrix".
 
