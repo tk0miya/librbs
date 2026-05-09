@@ -25,6 +25,38 @@ and `add_source` against edited files. Through M4, this path:
 A full rebuild on every edit is expensive. M5 introduces an optimization
 that **keeps resolution results for sources that weren't touched**.
 
+### Reference: Steep's actual usage pattern
+
+Steep's `SignatureService#update_env`
+(`lib/steep/services/signature_service.rb`, ~L302) batches a single
+edit cycle as the following triple, always called together:
+
+```ruby
+env = latest_env.unload(paths)               # remove decls of edited files
+updated_files.each_value { |c| env.add_source(c.source_or_self) }
+env.validate_type_params
+env = env.resolve_type_names(only: new_decls)  # ← only: is mandatory
+```
+
+Findings that constrain this milestone:
+
+1. **`resolve_type_names(only:)` is already wired up by M3d** (`fn
+   resolve_type_names(env, only)` + the Ruby patch with `only: nil`).
+   Steep always passes the set of newly added declarations, so M5 must
+   keep that path working — the incremental fast-path described in
+   Task 3 must compose with `only:`, not replace it.
+2. **`add_source` receives an already-parsed `RBS::Source::RBS` or
+   `RBS::Source::Ruby`** (not raw text). Steep does its own parsing.
+3. **Edits are batched** via `ChangeBuffer` before reaching `update_env`,
+   so `unload` taking an array of paths is the right shape.
+4. **Steep also does its own invalidation** at the `DefinitionBuilder`
+   level using `RBS::AncestorGraph` (`update_builder`, ~L377), independent
+   of what `Environment` returns. Our env-internal partial resolution is
+   purely additive — it does not need to expose any new diff information
+   to consumers.
+5. **A new `Environment` instance is expected per edit.** Steep replaces
+   `latest_builder.env` wholesale, so identity changes are not a concern.
+
 ## Design principles
 
 ### Safety first
@@ -53,7 +85,9 @@ either changed, full re-resolve.
 ### API
 
 Behavior must remain compatible with the existing `RBS::Environment`'s
-`unload` / `add_source`. Do not introduce new public API.
+`unload` and `add_source`. Do not introduce new public API.
+`resolve_type_names(only:)` is already in place from M3d; M5 only
+changes its internals to take an incremental path when possible.
 
 ## Tasks
 
@@ -83,20 +117,32 @@ def add_source(source)
 end
 ```
 
-The native implementation is similar: rebuild env, discard resolution.
+`source` is an already-parsed `RBS::Source::RBS` or `RBS::Source::Ruby`
+(Steep parses files itself before calling this). The native side must
+extract `source.declarations` and ingest them into a freshly built env;
+do not attempt to re-parse from text.
+
+The native implementation is otherwise similar to `unload`: rebuild env,
+discard resolution.
 
 ### 3. Partial re-resolution optimization
 
-Extend `resolve_type_names`:
+The Ruby patch and the `fn resolve_type_names(env, only)` Magnus entry
+point already exist (M3d). M5 only changes the **native body** to take
+an incremental path when a previous resolution is reachable through
+the env handle.
+
+Native logic:
 
 ```rust
 pub fn resolve_incremental(
     prev: &Environment,
     next: &Environment,
+    only: Option<&DeclSet>,   // Steep passes the newly added decls
 ) -> Result<Resolution, Error> {
     // If prev has no resolution, fall back to a normal resolve.
     let Some(prev_resolution) = &prev.resolution else {
-        return resolve(next);
+        return resolve(next, only);
     };
 
     // Diff all_names / aliases.
@@ -104,11 +150,11 @@ pub fn resolve_incremental(
     let next_names: FxHashSet<_> = next.all_type_names();
 
     if prev_names != next_names {
-        return resolve(next);   // full re-resolve
+        return resolve(next, only);   // full re-resolve
     }
 
     if prev.aliases() != next.aliases() {
-        return resolve(next);   // full re-resolve
+        return resolve(next, only);   // full re-resolve
     }
 
     // Only the source bodies changed; clone prev's resolution and
@@ -125,8 +171,15 @@ pub fn resolve_incremental(
 }
 ```
 
-In the `Environment#resolve_type_names` patch, take the incremental path
-when a previous handle is available; otherwise fall back to the full path.
+Notes:
+
+- `only:` is plumbed in by M3d. On the **incremental path** the
+  filter is implicitly satisfied because we re-resolve exactly the
+  changed sources (a superset of `only`). On the **full fallback** we
+  forward `only:` to the existing M3d driver unchanged.
+- We track `prev` via the env handle threaded through Ruby (each
+  `unload`/`add_source` returns a new env that retains a reference to
+  its predecessor's resolution). No global cache.
 
 ### 4. Tests
 
@@ -152,7 +205,8 @@ end
 
 ### 5. Benchmark
 
-LSP simulation:
+LSP simulation — mirror Steep's `update_env` triple so the numbers
+correspond to one real edit cycle:
 
 ```ruby
 # benchmark/lsp_simulation.rb
@@ -160,9 +214,10 @@ env = RBS::Environment.from_loader(loader).resolve_type_names
 
 # Repeat "edit one file" 100 times
 100.times do |i|
+  new_decls = edited_source.declarations
   env = env.unload([edited_path])
   env = env.add_source(edited_source)
-  env = env.resolve_type_names
+  env = env.resolve_type_names(only: new_decls)
 end
 ```
 
@@ -175,6 +230,9 @@ Compare pure RBS vs librbs (incremental ON / OFF).
 - [ ] LSP simulation is meaningfully faster than pure RBS.
 - [ ] Fallbacks are intact (edits that change type names trigger a full
       re-resolve).
+- [ ] Smoke test against Steep: a real Steep run using librbs produces
+      the same diagnostics as pure RBS for at least one sample project
+      (e.g. `steep/smoke`).
 
 ## Out of scope for this milestone
 
