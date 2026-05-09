@@ -1,6 +1,6 @@
 # M3: Environment and Type-Name Resolution (**main milestone**)
 
-> **This milestone is delivered as six PRs, not one.**
+> **This milestone is delivered as nine PRs, not one.**
 > See [M3/README.md](M3/README.md) for the slice index. The rest of this
 > document is the shared design reference; each slice's own doc states its
 > scope, dependencies, and per-slice acceptance.
@@ -75,11 +75,11 @@ one of the slices listed in [M3/README.md](M3/README.md):
 | 4. Resolution driver | M3b |
 | 5. Parallelization | M3b |
 | 6. Canonical dump | M3b (Rust side, format spec) + M3c (Ruby side helper) |
-| 7. Native API | M3c (`build_environment`, `canonical_dump`) + M3d (`resolve_type_names`) + M3e (`materialize_all`) |
-| 8. AST → Ruby conversion | M3e |
-| 9. Patch layer | M3c (loader + `from_loader`) + M3d (`resolve_type_names`) + M3e (accessor patches + `ensure_materialized`) + M3f (hardening) |
-| 10. Compatibility tests | M3c (core unresolved) + M3d (core resolved) + M3f (core+stdlib + gems) |
-| 11. Test matrix | M3f |
+| 7. Native API | M3c (`build_environment`, `canonical_dump`) + M3d (`resolve_type_names`) + M3e (`materialize_all` no-op stub) + M3h (`materialize_all` cut-over) |
+| 8. AST → Ruby conversion | M3e (plumbing: `MaterializeCtx`, `RBS::Location`, `RBS::TypeName`) + M3f (`RBS::Types::*`, `RBS::AST::TypeParam`) + M3g (`RBS::MethodType`, `RBS::AST::Members::*`) + M3h (`RBS::AST::Declarations::*`, `Environment::*Entry`) |
+| 9. Patch layer | M3c (loader + `from_loader`) + M3d (`resolve_type_names`) + M3h (accessor patches + `ensure_materialized`) + M3i (hardening) |
+| 10. Compatibility tests | M3c (core unresolved) + M3d (core resolved) + M3h (per-entry curated subset, canonical-dump unblocked) + M3i (core+stdlib + gems) |
+| 11. Test matrix | M3i |
 
 The remaining sections describe the design contract that all slices share.
 

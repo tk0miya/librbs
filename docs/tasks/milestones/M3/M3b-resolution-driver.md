@@ -108,7 +108,7 @@ necessary as a CI optimization.
 - Rust-side canonical dumper — followup "Rust-side `canonical_dump`
   implementation"; revisited only if the Ruby dumper becomes a CI
   bottleneck.
-- Materialization — M3e.
+- Materialization — M3e/M3f/M3g/M3h.
 
 ## Acceptance
 

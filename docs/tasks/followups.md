@@ -29,7 +29,7 @@ belong in this list.
   (`Environment.from_loader`, soon `resolve_type_names`,
   `class_decls` etc.) to delegate into Rust. This is the right shape
   for "drop-in speedup via `require 'librbs'`" and for landing
-  M3c–M3f without a re-architecture, but it carries permanent costs:
+  M3c–M3i without a re-architecture, but it carries permanent costs:
   - We pay an ivar-reading round trip on every loader-shaped input
     (`@core_root`, `@repository.@dirs`, `@libs`, `@dirs`).
   - Stringio injection and other load-time side effects have to be
@@ -63,7 +63,7 @@ belong in this list.
     object (e.g. instance variable access, `Marshal`, `inspect`
     format). Each such hook is a compatibility constraint on the
     Rust facade.
-- **When**: Not a near-term blocker. M3c–M3f finish on the patch
+- **When**: Not a near-term blocker. M3c–M3i finish on the patch
   path. Revisit at M4 (decision point) once benchmark numbers tell
   us how much the ivar-reading round trips and patch overhead
   actually cost; if they're significant, the rewrite becomes the
@@ -187,7 +187,7 @@ belong in this list.
   briefly shipped one, a separate format-spec doc, and a
   `Librbs::Native.canonical_dump` magnus bridge to drive it. We
   later reverted all three: the simpler path is to let the Ruby
-  helper walk the env (post-materialization at M3e+) and accept
+  helper walk the env (post-materialization at M3h+) and accept
   that compat runs trigger materialization. Only the Ruby helper
   remains; the Rust file, the format-spec doc, and the magnus
   bridge were removed.
@@ -260,30 +260,3 @@ belong in this list.
   positively in each `walk_*` covers exactly the relevant slice of
   the enum is hard to write directly in Rust; the exhaustive match
   itself is the test. No additional fixture needed.
-
-### Byte ↔ character offset bridge for `RBS::Location`
-
-- **Origin**: M2 review of `Buffer`.
-- **Where**: M3 materialization path that constructs `RBS::Location.new(buffer, start_pos, end_pos)`.
-- **What**: `ruby-rbs`'s Rust binding only exposes byte offsets
-  (`RBSLocationRange::start()` returns `start_byte`). `RBS::Buffer#pos_to_loc`
-  in Ruby, however, indexes by **character offset** (it splits via
-  `String#lines` and measures via `String#size`). Passing byte offsets into
-  `RBS::Location` gives wrong line/column results for any source containing
-  multi-byte characters (e.g. comments with Japanese text). For ASCII-only
-  RBS files there is no observable difference; for general inputs the LSP /
-  editor surfaces and user-facing error output will be off by however many
-  multi-byte chars precede the position.
-- **Required changes** — pick one:
-  - (A) Extend the `ruby-rbs` binding (or reach into the C struct directly)
-    to expose `start_character_offset` / `end_character_offset`, which the C
-    parser already maintains. This is the cleanest path.
-  - (B) Convert byte → character offset on the Rust side at materialization
-    time using `content[..byte_pos].chars().count()`. Cache per-source if
-    profiling shows hotspots.
-- **Note**: Independent of how line/column is computed — even if line/col
-  is computed lazily by `RBS::Buffer` on the Ruby side, the position values
-  passed in must already be character offsets. Buffer line tracking on the
-  Rust side is *not* needed for this; only the offset conversion is.
-- **When**: As part of the M3 materialization implementation. Add
-  multi-byte regression tests at the same time.
