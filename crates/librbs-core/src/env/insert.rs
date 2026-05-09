@@ -73,7 +73,7 @@ pub fn intern_type_name_node(
 /// to be findable via this function (see the reference-interning
 /// walkers below); callers in the resolver driver can therefore avoid
 /// taking `&mut TypeNameInterner` entirely.
-pub(crate) fn find_type_name_node(
+pub fn find_type_name_node(
     interner: FrozenInterner<'_>,
     node: &TypeNameNode<'_>,
 ) -> Option<TypeNameSym> {
