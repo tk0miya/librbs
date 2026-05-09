@@ -1,9 +1,9 @@
 //! M3f: build `RBS::AST::TypeParam` from a `TypeParamNode`. Used by
 //! M3g (method-type `type_params`) and M3h (decl-level `type_params`).
 
-use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
+use magnus::{Error, RArray, Value, kwargs, prelude::*, value::ReprValue};
 
-use ruby_rbs::node::{TypeParamNode, TypeParamVariance};
+use ruby_rbs::node::{Node, TypeParamNode, TypeParamVariance};
 
 use crate::materialize::MaterializeCtx;
 use crate::materialize::location::{add_optional_child, add_required_child, make_location};
@@ -63,4 +63,28 @@ pub fn materialize_type_param(
             "location" => loc
         ),))?
         .as_value())
+}
+
+/// Materialize every `TypeParam` node in `list`, then run the upstream
+/// `RBS::AST::TypeParam.resolve_variables(arr)` post-pass. Both
+/// declaration-level (`class Foo[X < _Each[Y], Y]`) and method-type
+/// (`def foo: [X] -> X`) call sites need the resolve_variables step,
+/// so the helper lives here rather than at the call sites.
+pub fn materialize_type_params(
+    ctx: &mut MaterializeCtx<'_>,
+    list: ruby_rbs::node::NodeList<'_>,
+) -> Result<RArray, Error> {
+    let arr = ctx.ruby.ary_new();
+    for p in list.iter() {
+        let Node::TypeParam(tp) = &p else {
+            unreachable!("type_params list must hold TypeParam nodes only");
+        };
+        let tp: &TypeParamNode<'_> = tp;
+        arr.push(materialize_type_param(ctx, tp)?)?;
+    }
+    let _: Value = ctx
+        .classes
+        .type_param
+        .funcall("resolve_variables", (arr,))?;
+    Ok(arr)
 }

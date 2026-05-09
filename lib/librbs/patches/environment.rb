@@ -19,6 +19,31 @@ module Librbs
         only_array = only.nil? ? nil : only.to_a
         Librbs::Native.resolve_type_names(self, only_array)
       end
+
+      # Each of the six `*_decls` accessors triggers a one-shot
+      # materialization on first access, then defers to the upstream
+      # ivar reader. `super()` ends up reading the
+      # `RBS::Environment::ClassEntry` etc. hash that
+      # `Librbs::Native.materialize_all` just wrote onto the instance.
+      %i[class_decls interface_decls type_alias_decls
+         constant_decls class_alias_decls global_decls].each do |m|
+        define_method(m) do
+          ensure_materialized
+          super()
+        end
+      end
+
+      private
+
+      # Pure-Ruby `RBS::Environment.new` instances have no Rust handle;
+      # the `instance_variable_defined?` guard preserves their
+      # accessor's no-op fast path (the upstream initializer already
+      # set `@class_decls = {}` etc.).
+      def ensure_materialized
+        return if @__librbs_materialized
+        return unless instance_variable_defined?(:@__librbs_handle)
+        Librbs::Native.materialize_all(self)
+      end
     end
   end
 end
