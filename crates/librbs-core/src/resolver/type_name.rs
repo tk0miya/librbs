@@ -19,7 +19,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::env::Environment;
 use crate::env::entry::Context;
-use crate::interner::{Sym, TypeNameInterner, TypeNameKind, TypeNameSym};
+use crate::interner::{FrozenInterner, Sym, TypeNameKind, TypeNameSym};
 
 #[derive(Debug)]
 pub struct TypeNameResolver {
@@ -68,14 +68,22 @@ impl TypeNameResolver {
 
     /// `RBS::Resolver::TypeNameResolver#resolve`. The result is cached on
     /// `(type_name, context)`; cache hits short-circuit the entire walk.
+    ///
+    /// Read-only against the interner: every candidate is looked up
+    /// through [`FrozenInterner`], never interned. The insert phase is expected
+    /// to have already interned every declaration (via
+    /// [`TypeNameInterner::with_prefix`] in `env::insert::insert_decl`)
+    /// and every reference reachable from a signature, so a `FrozenInterner`
+    /// miss is sufficient evidence that the candidate is not a
+    /// declaration and the walk can fall through.
     pub fn resolve(
         &mut self,
         type_name: TypeNameSym,
         context: &Context,
-        interner: &mut TypeNameInterner,
+        interner: FrozenInterner<'_>,
     ) -> Option<TypeNameSym> {
         let (ns, name, kind) = interner.lookup(type_name);
-        let absolute = !interner.namespaces.is_relative(ns);
+        let absolute = !interner.namespaces().is_relative(ns);
 
         if absolute && self.has_type_name(type_name) {
             return Some(type_name);
@@ -89,28 +97,30 @@ impl TypeNameResolver {
         let result = if matches!(kind, TypeNameKind::Class) {
             let mut visited: FxHashSet<TypeNameSym> = FxHashSet::default();
             self.resolve_namespace0(type_name, context, &mut visited, interner)
-        } else if interner.namespaces.is_empty(ns) {
+        } else if interner.namespaces().is_empty(ns) {
             self.resolve_type_name(name, context, interner)
         } else {
             // namespace.to_type_name → (parent, last). For an interface or
             // type-alias name like `Foo::Bar::_Each`, we resolve the
             // namespace `Foo::Bar` first, then re-attach `_Each`.
-            let (parent_ns, last_seg) = interner.namespaces.to_type_name(ns)?;
-            let ns_tn = interner.intern(parent_ns, last_seg, TypeNameKind::Class);
-            let mut visited: FxHashSet<TypeNameSym> = FxHashSet::default();
-            if let Some(resolved_ns_tn) =
-                self.resolve_namespace0(ns_tn, context, &mut visited, interner)
-            {
-                let resolved_ns = interner.to_namespace(resolved_ns_tn);
-                let full = interner.intern(resolved_ns, name, kind);
+            //
+            // If the parent path or the namespace-as-class candidate has
+            // never been interned, no declaration uses that namespace as
+            // a class scope, so resolution must fail — return `None`.
+            (|| {
+                let (parent_ns, last_seg) = interner.namespaces().to_type_name(ns)?;
+                let ns_tn = interner.intern(parent_ns, last_seg, TypeNameKind::Class)?;
+                let mut visited: FxHashSet<TypeNameSym> = FxHashSet::default();
+                let resolved_ns_tn =
+                    self.resolve_namespace0(ns_tn, context, &mut visited, interner)?;
+                let resolved_ns = interner.to_namespace(resolved_ns_tn)?;
+                let full = interner.intern(resolved_ns, name, kind)?;
                 if self.has_type_name(full) {
                     Some(full)
                 } else {
                     None
                 }
-            } else {
-                None
-            }
+            })()
         };
 
         self.cache.insert(key, result);
@@ -124,23 +134,27 @@ impl TypeNameResolver {
         &self,
         name: Sym,
         context: &[TypeNameSym],
-        interner: &mut TypeNameInterner,
+        interner: FrozenInterner<'_>,
     ) -> Option<TypeNameSym> {
         let kind = {
-            let s = interner.symbols.lookup(name);
+            let s = interner.symbols().lookup(name);
             TypeNameKind::detect(s)
         };
         if let Some((&inner, outer)) = context.split_last() {
-            let inner_ns = interner.to_namespace(inner);
-            let candidate = interner.intern(inner_ns, name, kind);
-            if self.has_type_name(candidate) {
-                Some(candidate)
-            } else {
-                self.resolve_type_name(name, outer, interner)
+            // `to_namespace` returning `None` means `inner` has no
+            // children declared, so it can't host `name`; fall through
+            // to the outer scope. Likewise, an un-interned candidate
+            // tuple means no such declaration exists.
+            if let Some(inner_ns) = interner.to_namespace(inner)
+                && let Some(candidate) = interner.intern(inner_ns, name, kind)
+                && self.has_type_name(candidate)
+            {
+                return Some(candidate);
             }
+            self.resolve_type_name(name, outer, interner)
         } else {
-            let root = interner.namespaces.root_absolute();
-            let candidate = interner.intern(root, name, kind);
+            let root = interner.namespaces().root_absolute();
+            let candidate = interner.intern(root, name, kind)?;
             if self.has_type_name(candidate) {
                 Some(candidate)
             } else {
@@ -156,19 +170,19 @@ impl TypeNameResolver {
         &self,
         head: Sym,
         context: &[TypeNameSym],
-        interner: &mut TypeNameInterner,
+        interner: FrozenInterner<'_>,
     ) -> Option<TypeNameSym> {
         if let Some((&inner, outer)) = context.split_last() {
-            let inner_ns = interner.to_namespace(inner);
-            let candidate = interner.intern(inner_ns, head, TypeNameKind::Class);
-            if self.has_type_name(candidate) || self.aliased_name(candidate) {
-                Some(candidate)
-            } else {
-                self.resolve_head_namespace(head, outer, interner)
+            if let Some(inner_ns) = interner.to_namespace(inner)
+                && let Some(candidate) = interner.intern(inner_ns, head, TypeNameKind::Class)
+                && (self.has_type_name(candidate) || self.aliased_name(candidate))
+            {
+                return Some(candidate);
             }
+            self.resolve_head_namespace(head, outer, interner)
         } else {
-            let root = interner.namespaces.root_absolute();
-            let candidate = interner.intern(root, head, TypeNameKind::Class);
+            let root = interner.namespaces().root_absolute();
+            let candidate = interner.intern(root, head, TypeNameKind::Class)?;
             if self.has_type_name(candidate) || self.aliased_name(candidate) {
                 Some(candidate)
             } else {
@@ -185,7 +199,7 @@ impl TypeNameResolver {
         rhs: TypeNameSym,
         context: &Context,
         visited: &mut FxHashSet<TypeNameSym>,
-        interner: &mut TypeNameInterner,
+        interner: FrozenInterner<'_>,
     ) -> Option<TypeNameSym> {
         if !visited.insert(type_name) {
             return None;
@@ -203,10 +217,10 @@ impl TypeNameResolver {
         type_name: TypeNameSym,
         context: &Context,
         visited: &mut FxHashSet<TypeNameSym>,
-        interner: &mut TypeNameInterner,
+        interner: FrozenInterner<'_>,
     ) -> Option<TypeNameSym> {
         let (ns, name, _kind) = interner.lookup(type_name);
-        let (path, absolute) = interner.namespaces.lookup(ns).clone();
+        let (path, absolute) = interner.namespaces().lookup(ns).clone();
 
         let mut segments: Vec<Sym> = path;
         segments.push(name);
@@ -214,10 +228,10 @@ impl TypeNameResolver {
 
         let head_tn: Option<TypeNameSym> = if absolute {
             let root_name = interner.intern(
-                interner.namespaces.root_absolute(),
+                interner.namespaces().root_absolute(),
                 head_sym,
                 TypeNameKind::Class,
-            );
+            )?;
             if self.has_type_name(root_name) || self.aliased_name(root_name) {
                 Some(root_name)
             } else {
@@ -238,13 +252,17 @@ impl TypeNameResolver {
         }
 
         // Walk the tail, resolving each segment against `acc.to_namespace`.
+        // `to_namespace` / `intern` returning `None` means `acc` has no
+        // child declaration matching `seg`, so resolution must fail —
+        // there is no aliased fallback to consider when the candidate
+        // itself was never interned.
         for &seg in &segments[1..] {
-            let acc_ns = interner.to_namespace(acc);
+            let acc_ns = interner.to_namespace(acc)?;
             let kind = {
-                let s = interner.symbols.lookup(seg);
+                let s = interner.symbols().lookup(seg);
                 TypeNameKind::detect(s)
             };
-            let candidate = interner.intern(acc_ns, seg, kind);
+            let candidate = interner.intern(acc_ns, seg, kind)?;
             if self.has_type_name(candidate) {
                 acc = candidate;
             } else if let Some((rhs, ctx)) = self.aliases.get(&candidate).cloned() {
@@ -346,7 +364,7 @@ mod tests {
         add_class(&mut env, foo);
 
         let mut resolver = TypeNameResolver::build(&env);
-        let resolved = resolver.resolve(foo, &Vec::new(), &mut env.interner);
+        let resolved = resolver.resolve(foo, &Vec::new(), env.interner.frozen());
         assert_eq!(resolved, Some(foo));
     }
 
@@ -363,7 +381,7 @@ mod tests {
         let context = vec![foo, foo_bar];
         let unq_foo = intern_class(&mut env.interner, false, &[], "Foo");
         let mut resolver = TypeNameResolver::build(&env);
-        let resolved = resolver.resolve(unq_foo, &context, &mut env.interner);
+        let resolved = resolver.resolve(unq_foo, &context, env.interner.frozen());
         assert_eq!(resolved, Some(foo));
     }
 
@@ -379,7 +397,7 @@ mod tests {
         let context = vec![foo];
         let unq_each = intern_interface(&mut env.interner, false, &[], "_Each");
         let mut resolver = TypeNameResolver::build(&env);
-        let resolved = resolver.resolve(unq_each, &context, &mut env.interner);
+        let resolved = resolver.resolve(unq_each, &context, env.interner.frozen());
         assert_eq!(resolved, Some(foo_each));
     }
 
@@ -398,7 +416,7 @@ mod tests {
 
         let probe = intern_class(&mut env.interner, false, &["AliasName"], "Inner");
         let mut resolver = TypeNameResolver::build(&env);
-        let resolved = resolver.resolve(probe, &Vec::new(), &mut env.interner);
+        let resolved = resolver.resolve(probe, &Vec::new(), env.interner.frozen());
         assert_eq!(resolved, Some(real_inner));
     }
 
@@ -413,7 +431,7 @@ mod tests {
 
         let probe = intern_class(&mut env.interner, false, &[], "A");
         let mut resolver = TypeNameResolver::build(&env);
-        let resolved = resolver.resolve(probe, &Vec::new(), &mut env.interner);
+        let resolved = resolver.resolve(probe, &Vec::new(), env.interner.frozen());
         assert_eq!(resolved, None);
     }
 
@@ -425,7 +443,7 @@ mod tests {
 
         let probe = intern_class(&mut env.interner, false, &[], "Bar");
         let mut resolver = TypeNameResolver::build(&env);
-        let resolved = resolver.resolve(probe, &Vec::new(), &mut env.interner);
+        let resolved = resolver.resolve(probe, &Vec::new(), env.interner.frozen());
         assert_eq!(resolved, None);
     }
 }
