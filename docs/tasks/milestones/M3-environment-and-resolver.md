@@ -75,10 +75,10 @@ one of the slices listed in [M3/README.md](M3/README.md):
 | 4. Resolution driver | M3b |
 | 5. Parallelization | M3b |
 | 6. Canonical dump | M3b (Rust side, format spec) + M3c (Ruby side helper) |
-| 7. Native API | M3c (`build_environment`, `canonical_dump`) + M3d (`resolve_type_names`) + M3e (`materialize_all` no-op stub) + M3h (`materialize_all` cut-over) |
-| 8. AST → Ruby conversion | M3e (plumbing: `MaterializeCtx`, `RBS::Location`, `RBS::TypeName`) + M3f (`RBS::Types::*`, `RBS::AST::TypeParam`) + M3g (`RBS::MethodType`, `RBS::AST::Members::*`) + M3h (`RBS::AST::Declarations::*`, `Environment::*Entry`) |
-| 9. Patch layer | M3c (loader + `from_loader`) + M3d (`resolve_type_names`) + M3h (accessor patches + `ensure_materialized`) + M3i (hardening) |
-| 10. Compatibility tests | M3c (core unresolved) + M3d (core resolved) + M3h (per-entry curated subset, canonical-dump unblocked) + M3i (core+stdlib + gems) |
+| 7. Native API | M3c (`build_environment`, `canonical_dump`) + M3d (`resolve_type_names`) + M3e (`materialize_all` no-op stub) + M3h (`materialize_all` cut-over) + M3k (`@sources` ivar set inside `materialize_all`) |
+| 8. AST → Ruby conversion | M3e (plumbing: `MaterializeCtx`, `RBS::Location`, `RBS::TypeName`) + M3f (`RBS::Types::*`, `RBS::AST::TypeParam`) + M3g (`RBS::MethodType`, `RBS::AST::Members::*`) + M3h (`RBS::AST::Declarations::*`, `Environment::*Entry`) + M3k (`RBS::Source::RBS`, `RBS::AST::Directives::*`) |
+| 9. Patch layer | M3c (loader + `from_loader`) + M3d (`resolve_type_names`) + M3h (`*_decls` accessor patches + `ensure_materialized`) + M3k (`sources` / `declarations` / `each_*_source` accessor patches) + M3i (hardening) |
+| 10. Compatibility tests | M3c (core unresolved) + M3d (core resolved) + M3h (per-entry curated subset, canonical-dump unblocked) + M3k (`sources` / `declarations` parity spec) + M3i (core+stdlib + gems) |
 | 11. Test matrix | M3i |
 
 The remaining sections describe the design contract that all slices share.
