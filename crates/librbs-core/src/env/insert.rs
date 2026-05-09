@@ -46,7 +46,7 @@ fn assign_decl_index(counter: &mut u32, source_index: u32) -> DeclRef {
 /// insert pass (entry registration) and the M3b resolver driver
 /// (recording type-name occurrences) need to perform exactly this
 /// translation, so the shared definition lives here.
-pub fn intern_type_name_node(
+pub(crate) fn intern_type_name_node(
     interner: &mut TypeNameInterner,
     node: &TypeNameNode<'_>,
 ) -> TypeNameSym {
@@ -518,9 +518,11 @@ fn insert_decl(
 /// top-level declaration" list. `env::insert` registers them as entries
 /// in the six `*_decls` hashes; `resolver::driver` recurses through the
 /// same set when traversing class/module bodies; `canonical` emits one
-/// fragment per such node. Keeping the three modules in lock-step
-/// requires a single definition, which is here.
-pub(crate) fn is_decl_node(n: &Node<'_>) -> bool {
+/// fragment per such node; M3h's materializer (in the `ext/librbs`
+/// crate) likewise uses it to dispatch class/module member walks
+/// between nested-decl recursion and member materialization. Keeping
+/// these in lock-step requires a single definition, which is here.
+pub fn is_decl_node(n: &Node<'_>) -> bool {
     matches!(
         n,
         Node::Class(_)

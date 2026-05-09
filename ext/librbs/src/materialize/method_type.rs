@@ -8,12 +8,12 @@
 
 use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
 
-use ruby_rbs::node::{BlockTypeNode, MethodTypeNode, Node, TypeParamNode};
+use ruby_rbs::node::{BlockTypeNode, MethodTypeNode};
 
 use crate::materialize::MaterializeCtx;
 use crate::materialize::location::{add_optional_child, add_required_child, make_location};
 use crate::materialize::type_::materialize_type;
-use crate::materialize::type_param::materialize_type_param;
+use crate::materialize::type_param::materialize_type_params;
 
 /// Build `RBS::MethodType.new(type_params:, type:, block:, location:)`.
 /// Mirrors `ast_translation.c::RBS_METHOD_TYPE` (vendor):
@@ -39,18 +39,7 @@ pub fn materialize_method_type(
         node.type_params_location().as_ref(),
     )?;
 
-    let type_params = ctx.ruby.ary_new();
-    for p in node.type_params().iter() {
-        let Node::TypeParam(tp) = &p else {
-            unreachable!("MethodType.type_params holds TypeParam nodes only");
-        };
-        let tp: &TypeParamNode<'_> = tp;
-        type_params.push(materialize_type_param(ctx, tp)?)?;
-    }
-    let _: Value = ctx
-        .classes
-        .type_param
-        .funcall("resolve_variables", (type_params,))?;
+    let type_params = materialize_type_params(ctx, node.type_params())?;
 
     let func_node = node.type_();
     let func = materialize_type(ctx, &func_node)?;

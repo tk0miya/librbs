@@ -7,18 +7,11 @@ require_relative "../support/without_librbs"
 
 # Compatibility check: the Ruby canonical dumper applied to a librbs-built
 # `RBS::Environment` must agree with the same dumper applied to a pure-RBS
-# environment built in a fresh subprocess.
-#
-# **Currently pending.** M3c builds the Rust `Environment` and stashes it
-# in `@__librbs_handle`, but materialization back into Ruby
-# `@class_decls` etc. is M3e. Until then `canonical_dump(librbs_env)`
-# walks empty hashes and cannot agree with the pure-RBS dump. The
-# expectation is wired up here so that flipping `pending` off is the
-# only change needed once M3e lands.
+# environment built in a fresh subprocess. End-to-end regression net for
+# the M3h materialization cut-over — covers Locations, TypeNames,
+# member shapes, and decl-level type_params on a real stdlib subset.
 RSpec.describe "canonical_dump compatibility (core)" do
   it "matches between librbs and pure RBS for unresolved core" do
-    pending "Ruby-side canonical_dump requires M3e materialization to populate @class_decls"
-
     loader = RBS::EnvironmentLoader.new
     env = RBS::Environment.from_loader(loader)
     librbs_dump = canonical_dump(env)
@@ -48,14 +41,8 @@ RSpec.describe "canonical_dump compatibility (core)" do
   end
 
   # Resolved variant — same shape as the unresolved spec above, with
-  # `resolve_type_names` applied to both sides. Like its unresolved
-  # sibling this is `pending` until M3e materialization populates the
-  # `*_decls` Hashes the Ruby canonical dumper walks; the M3d native
-  # `resolve_type_names` bridge is exercised by the next sanity check
-  # below regardless.
+  # `resolve_type_names` applied to both sides.
   it "matches between librbs and pure RBS for resolved core" do
-    pending "Ruby-side canonical_dump requires M3e materialization to populate @class_decls"
-
     loader = RBS::EnvironmentLoader.new
     env = RBS::Environment.from_loader(loader).resolve_type_names
     librbs_dump = canonical_dump(env)

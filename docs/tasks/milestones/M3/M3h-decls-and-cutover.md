@@ -178,20 +178,20 @@ through to `super()`.
 
 ## Acceptance
 
-- [ ] `Librbs::Native.materialize_all(env)` populates the six
+- [x] `Librbs::Native.materialize_all(env)` populates the six
       `*_decls` ivars with real `RBS::AST::*` instances.
-- [ ] Re-entrancy: calling `materialize_all` twice is a no-op.
-- [ ] Patched accessors auto-trigger materialization and return the
+- [x] Re-entrancy: calling `materialize_all` twice is a no-op.
+- [x] Patched accessors auto-trigger materialization and return the
       same object on repeat calls.
-- [ ] Per-entry equality spec passes against the curated stdlib
+- [x] Per-entry equality spec passes against the curated stdlib
       subset for both unresolved and resolved envs (full matrix is
       M3i).
-- [ ] Canonical-dump compat (core / resolved core) is no longer
+- [x] Canonical-dump compat (core / resolved core) is no longer
       `pending` and passes.
-- [ ] Multi-byte regression (from M3e) remains green through the
+- [x] Multi-byte regression (from M3e) remains green through the
       cut-over.
-- [ ] All M3a–M3g test-only entry points are removed.
-- [ ] CI green.
+- [x] All M3a–M3g test-only entry points are removed.
+- [x] CI green.
 
 ## References
 

@@ -15,6 +15,7 @@ use librbs_core::Environment;
 use librbs_core::env::entry::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
 
+pub mod decl;
 pub mod location;
 pub mod member;
 pub mod method_type;
@@ -75,6 +76,24 @@ pub struct ClassRefs {
     pub members_alias: RClass,
     pub members_public: RClass,
     pub members_private: RClass,
+    pub decls_class: RClass,
+    pub decls_class_super: RClass,
+    pub decls_module: RClass,
+    pub decls_module_self: RClass,
+    pub decls_interface: RClass,
+    pub decls_type_alias: RClass,
+    pub decls_constant: RClass,
+    pub decls_global: RClass,
+    pub decls_class_alias: RClass,
+    pub decls_module_alias: RClass,
+    pub entry_class: RClass,
+    pub entry_module: RClass,
+    pub entry_interface: RClass,
+    pub entry_type_alias: RClass,
+    pub entry_constant: RClass,
+    pub entry_global: RClass,
+    pub entry_class_alias: RClass,
+    pub entry_module_alias: RClass,
 }
 
 impl ClassRefs {
@@ -128,6 +147,24 @@ impl ClassRefs {
             members_alias: ruby.eval("RBS::AST::Members::Alias")?,
             members_public: ruby.eval("RBS::AST::Members::Public")?,
             members_private: ruby.eval("RBS::AST::Members::Private")?,
+            decls_class: ruby.eval("RBS::AST::Declarations::Class")?,
+            decls_class_super: ruby.eval("RBS::AST::Declarations::Class::Super")?,
+            decls_module: ruby.eval("RBS::AST::Declarations::Module")?,
+            decls_module_self: ruby.eval("RBS::AST::Declarations::Module::Self")?,
+            decls_interface: ruby.eval("RBS::AST::Declarations::Interface")?,
+            decls_type_alias: ruby.eval("RBS::AST::Declarations::TypeAlias")?,
+            decls_constant: ruby.eval("RBS::AST::Declarations::Constant")?,
+            decls_global: ruby.eval("RBS::AST::Declarations::Global")?,
+            decls_class_alias: ruby.eval("RBS::AST::Declarations::ClassAlias")?,
+            decls_module_alias: ruby.eval("RBS::AST::Declarations::ModuleAlias")?,
+            entry_class: ruby.eval("RBS::Environment::ClassEntry")?,
+            entry_module: ruby.eval("RBS::Environment::ModuleEntry")?,
+            entry_interface: ruby.eval("RBS::Environment::InterfaceEntry")?,
+            entry_type_alias: ruby.eval("RBS::Environment::TypeAliasEntry")?,
+            entry_constant: ruby.eval("RBS::Environment::ConstantEntry")?,
+            entry_global: ruby.eval("RBS::Environment::GlobalEntry")?,
+            entry_class_alias: ruby.eval("RBS::Environment::ClassAliasEntry")?,
+            entry_module_alias: ruby.eval("RBS::Environment::ModuleAliasEntry")?,
         })
     }
 }
@@ -191,6 +228,18 @@ pub struct MaterializeCtx<'a> {
     cursor: usize,
 }
 
+/// Saved cursor state for `MaterializeCtx`. M3h's nested-decl recursion
+/// swaps the per-decl resolution slice when descending into a child decl
+/// and restores the parent's slice on return — without this, a nested
+/// `class Foo; class Bar; end; def baz: ...; end` would leak cursor
+/// advancement from `Bar`'s slice into `Foo`'s, and the next
+/// `pull_resolution` for `Foo` would consume an entry meant for `Bar`.
+pub struct CursorState<'a> {
+    current_resolutions: Option<&'a [ResolvedRef]>,
+    cursor: usize,
+    source_index: u32,
+}
+
 impl<'a> MaterializeCtx<'a> {
     pub fn new(
         ruby: &'a Ruby,
@@ -215,9 +264,25 @@ impl<'a> MaterializeCtx<'a> {
     /// returning to a previously-active source picks up the same
     /// `RBS::Buffer` value. Used by M3h's `materialize_all` as it
     /// iterates `env.*_decls` and crosses source boundaries.
-    #[allow(dead_code)]
     pub fn set_source(&mut self, source_index: u32) {
         self.source_index = source_index;
+    }
+
+    /// Snapshot the resolution cursor state so a nested-decl recursion
+    /// can [`enter_decl`] under a fresh slice and [`restore_cursor`]
+    /// the outer decl's slice on return.
+    pub fn save_cursor(&self) -> CursorState<'a> {
+        CursorState {
+            current_resolutions: self.current_resolutions,
+            cursor: self.cursor,
+            source_index: self.source_index,
+        }
+    }
+
+    pub fn restore_cursor(&mut self, state: CursorState<'a>) {
+        self.current_resolutions = state.current_resolutions;
+        self.cursor = state.cursor;
+        self.source_index = state.source_index;
     }
 
     /// Set the resolution slice for `decl_ref` as the cursor's source.
