@@ -15,60 +15,151 @@ belong in this list.
 
 ## Open
 
-### Reimplement `RBS::Environment` and `RBS::EnvironmentLoader` in Rust
+### Reimplement `RBS::Environment` and `RBS::EnvironmentLoader` as Core+Wrapper
 
-- **Origin**: M3c review.
+- **Origin**: M3c review; design firmed up in pre-M4 discussion.
 - **Where**: today — `lib/librbs/patches/environment.rb`,
-  `lib/librbs/patches/environment_loader.rb`, and the magnus bridge in
-  `ext/librbs/src/lib.rs` that reads the loader's ivars to build a
-  Rust `Loader`. End state — pure-Rust `Environment` / `Loader`
-  exposed across the magnus boundary, with the Ruby classes as thin
-  facades (or removed entirely from the user's view).
-- **What**: The current strategy is *patch-based*. The two upstream
-  Ruby classes stay in place; we monkey-patch entry points
-  (`Environment.from_loader`, soon `resolve_type_names`,
-  `class_decls` etc.) to delegate into Rust. This is the right shape
-  for "drop-in speedup via `require 'librbs'`" and for landing
-  M3c–M3i without a re-architecture, but it carries permanent costs:
-  - We pay an ivar-reading round trip on every loader-shaped input
-    (`@core_root`, `@repository.@dirs`, `@libs`, `@dirs`).
-  - Stringio injection and other load-time side effects have to be
-    re-implemented in Rust to match the Ruby semantics
-    (see `inject_stringio` in the magnus bridge).
-  - Patches accumulate as we hook more entry points; behavioral
-    drift between "with librbs" and "without librbs" gets harder to
-    audit the more surface area we cover.
-  - `@__librbs_handle` is an out-of-band attribute on `RBS::*`
-    instances that anyone calling `Marshal.dump` / `dup` /
-    `initialize_copy` could lose silently.
-- **Ideal goal**: rewrite `Environment` and `EnvironmentLoader` as
-  pure-Rust types and expose them through magnus as the canonical
-  implementation (i.e. `RBS::Environment` and
-  `RBS::EnvironmentLoader` themselves become magnus-wrapped Rust
-  objects). The Ruby class definitions in `vendor/rbs/lib/rbs/...`
-  would no longer be the authority; the patches would dissolve.
-- **Required changes** (sketch — order TBD):
-  - Hoist `librbs_core::Loader` / `librbs_core::Environment` to
-    public Ruby classes via `magnus::wrap`, with method surfaces
-    that match upstream's public API (`add`, `add_collection`,
-    `each_signature`, `class_decls`, ...).
-  - Replace the monkey-patches under `lib/librbs/patches/` with
-    `RBS::Environment = Librbs::Environment` (and equivalent for
-    Loader), guarded by a single `librbs/patches.rb` switch.
-  - Decide what to do with the existing `RBS::*` classes — leave
-    them dormant (still loadable for users who `without_librbs`),
-    or vendor a stub that errors if invoked unpatched.
-  - Audit downstream consumers (`steep`, `rubocop-rbs`, etc.) for
-    code that depends on `RBS::Environment` being a plain Ruby
-    object (e.g. instance variable access, `Marshal`, `inspect`
-    format). Each such hook is a compatibility constraint on the
-    Rust facade.
-- **When**: Not a near-term blocker. M3c–M3i finish on the patch
-  path. Revisit at M4 (decision point) once benchmark numbers tell
-  us how much the ivar-reading round trips and patch overhead
-  actually cost; if they're significant, the rewrite becomes the
-  natural next step. If they're not, the patches can stay
-  indefinitely and this followup becomes a nice-to-have.
+  `lib/librbs/patches/environment_loader.rb`, and the magnus
+  bridge in `ext/librbs/src/lib.rs` that reads the loader's ivars
+  to build a Rust `Loader`. End state — pure-Rust
+  `Librbs::EnvironmentCore` / `Librbs::EnvironmentLoaderCore`
+  exposed via magnus, with thin Ruby subclasses
+  `Librbs::Environment` / `Librbs::EnvironmentLoader` rebound onto
+  `RBS::Environment` / `RBS::EnvironmentLoader` by constant
+  reassignment.
+- **What**: The current strategy is *partial patching*: we
+  monkey-patch a few entry points (`from_loader`, soon
+  `resolve_type_names`, `class_decls` and the five sibling decl
+  hashes) on the upstream Ruby classes. This is enough for M3c–M3i
+  to land but it has a structural correctness problem: any
+  upstream method we forget to patch falls through to the original
+  Ruby code, which reads bare ivars (`@sources`, `@class_decls`,
+  ...) that the Rust handle does not populate. Concrete examples
+  in `vendor/rbs/lib/rbs/environment.rb`:
+  - `declarations` → `sources.flat_map(&:declarations)` (L14):
+    with `*_decls` patched but `sources` not, returns `[]` while
+    `class_decls` is fully populated.
+  - `each_rbs_source` / `each_ruby_source` (L470-): empty iterator.
+  - `buffers` → `sources.map(&:buffer)` (L998): empty array.
+  - `inspect` (L993): reads ivar sizes directly, prints
+    `(0 items)`.
+  - `add_source` / `unload`: mutate `@sources` and the decl hashes
+    in pure Ruby; the Rust handle goes out of sync.
+  - `initialize_copy` (L59): dups ivars, drops `@__librbs_handle`.
+  These are silent inconsistencies that surface only as
+  hard-to-diagnose application bugs.
+- **Ideal goal**: `RBS::Environment` and `RBS::EnvironmentLoader`
+  become Ruby subclasses of magnus-wrapped Rust classes. The Rust
+  layer owns all primitive state and exposes just enough accessors
+  for the upstream Ruby derivative methods (`declarations`,
+  `each_decl`, `inspect`, `validate_type_params`, ...) to keep
+  working unchanged on top. We do not need *everything* in Rust —
+  the data layer is Rust, the accessor/iteration/presentation
+  layer stays Ruby.
+- **Architecture**:
+  - `Librbs::EnvironmentCore` (Rust, magnus `TypedData`):
+    - state: `sources`, six decl tables, resolution side-table.
+    - methods: `class_decls` / `interface_decls` /
+      `type_alias_decls` / `constant_decls` / `class_alias_decls`
+      / `global_decls` (lazy materialize), `sources` (lazy
+      materialize), `add_source`, `unload`,
+      `resolve_type_names(only:)`, `class_decl?`,
+      `interface_name?`, and similar fast-path predicates that do
+      not force materialization.
+    - class methods: `from_loader`.
+  - `Librbs::Environment < Librbs::EnvironmentCore` (Ruby):
+    - hosts the derivative methods carried over from
+      `vendor/rbs/lib/rbs/environment.rb`: `declarations`,
+      `each_rbs_source`, `each_ruby_source`, `buffers`,
+      `each_decl`, `each_constant`, `each_global`,
+      `each_type_name`, `inspect` (rewritten to use accessors
+      instead of ivars), `validate_type_params`,
+      `normalize_type_name`, `normalize_module_name`,
+      `class_alias?`, `module_alias?`, `class?`, `module?`,
+      `absolute_type`, `subtract`, etc.
+    - all derivative methods read state through the Rust
+      accessors, so they stay correct as long as the accessors
+      return correct data — no per-method patching required.
+  - `RBS::Environment` rebound:
+    ```ruby
+    Librbs::Environment::ClassEntry       = RBS::Environment::ClassEntry
+    Librbs::Environment::SingleEntry      = RBS::Environment::SingleEntry
+    Librbs::Environment::ModuleAliasEntry = RBS::Environment::ModuleAliasEntry
+    Librbs::Environment::ClassAliasEntry  = RBS::Environment::ClassAliasEntry
+    Librbs::Environment::InterfaceEntry   = RBS::Environment::InterfaceEntry
+    Librbs::Environment::TypeAliasEntry   = RBS::Environment::TypeAliasEntry
+    Librbs::Environment::ConstantEntry    = RBS::Environment::ConstantEntry
+    Librbs::Environment::GlobalEntry      = RBS::Environment::GlobalEntry
+
+    RBS.send(:remove_const, :Environment)
+    RBS::Environment = Librbs::Environment
+    ```
+    Constant reassignment is preferred over `prepend`-style
+    patching because the latter cannot reshape allocator /
+    parent-class relationships. Nested constants must be aliased
+    before the rebind so that `RBS::Environment::ClassEntry` and
+    friends keep resolving for downstream consumers.
+  - The same Core+Wrapper pattern applies to `EnvironmentLoader`,
+    with the additional choice of whether to push loader config
+    (`@core_root`, `@repository`, `@libs`, `@dirs`) into Rust as
+    well. Doing so eliminates the ivar-reading round trip in the
+    magnus bridge and the `inject_stringio` Ruby-side detour, but
+    forces the M2 follow-up "Full `Gem::Version` semantics" to
+    land first because `Repository::lookup` would then run in
+    Rust against real-world version strings. Decision deferred to
+    the kickoff of this followup.
+- **Source materialization granularity**: materialize all sources
+  at once on first access, sharing the lazy boundary with the six
+  decl hashes. Per-Source laziness is rejected for v1: every
+  upstream method that touches `sources` iterates it in full, so
+  the bookkeeping does not pay off. A two-tier split (cheap
+  `Buffer` eager, AST translation lazy per Source) is left as a
+  future optimization if profiling shows it.
+- **Marshal**: not supported. `_dump` raises a clear `TypeError`
+  to prevent silent corruption. Steep, rubocop-rbs, and typeprof
+  do not call `Marshal.dump` on `Environment` (verified during M5
+  investigation). Implementing `_dump` / `_load` against a
+  bumpalo arena and the resolution side-table is a multi-day
+  effort with no current consumer; revisit only if a real consumer
+  surfaces, and at that point the most likely shape is "dump the
+  inputs, replay the pipeline on load" rather than serializing
+  the resolved state.
+- **Required changes** (sketch — order TBD at the kickoff of this
+  followup):
+  - Define `Librbs::EnvironmentCore` in Rust via
+    `magnus::TypedData` with the accessor surface above.
+    Implement `materialize_all!` as a single entry point that
+    builds the six decl Hashes and the `sources` Array.
+  - Port the derivative methods of `RBS::Environment` into
+    `Librbs::Environment`, rewriting any ivar reads as accessor
+    calls (notably `inspect`).
+  - Rebind `RBS::Environment` after aliasing nested constants.
+    Drop `lib/librbs/patches/environment.rb` and the
+    `@__librbs_handle` ivar.
+  - Decide loader scope (full Core or `load`-only). If full Core,
+    land the M2 follow-up "Full `Gem::Version` semantics in
+    `librbs-core`" first, then port loader config and `add` /
+    `add_collection` / repository wiring into Rust. If
+    `load`-only, keep the loader Ruby-resident and only Core-ify
+    the `load` entry point.
+  - Audit downstream consumers (`steep`, `rubocop-rbs`,
+    `typeprof`, ...) for code that depends on:
+    - `RBS::Environment` being a plain Ruby object (ivar reads,
+      `Marshal`, `inspect` format),
+    - `klass.name == "RBS::Environment"` literal comparisons
+      (the rebound class reports `"Librbs::Environment"`),
+    - direct `Class#allocate` calls on `RBS::Environment`.
+    Each hit is a compatibility constraint on the Rust facade.
+  - Add a meta-test that asserts every public instance method of
+    upstream `RBS::Environment` (and `RBS::EnvironmentLoader`)
+    resolves on the rebound class, so that future RBS upstream
+    bumps fail loudly when new methods land.
+- **When**: Not before M4 completion. M3c–M3i finish on the
+  current patch path. Revisit at M4 once benchmarks tell us how
+  much the partial-patch overhead costs and how often the silent
+  inconsistencies surface in practice. The architecture above is
+  the agreed direction whenever this followup is taken on; the
+  open question is timing, not shape.
 
 ### Full `Gem::Version` semantics in `librbs-core`
 
