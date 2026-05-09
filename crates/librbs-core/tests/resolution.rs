@@ -3,7 +3,8 @@
 //! Each test builds a small `Environment` from an inline RBS source and
 //! exercises one slice of the M3b acceptance criteria:
 //!
-//! * specific `NodeId → ResolvedRef` entries land in the right shape;
+//! * the per-`DeclRef` `Vec<ResolvedRef>` slice contains the expected
+//!   resolution outcomes in pre-order;
 //! * `# resolve-type-names: false` short-circuits resolution for that
 //!   source;
 //! * for every entry, the stored `DeclRef` resolves back to a parsed
@@ -18,9 +19,9 @@ use std::path::PathBuf;
 
 use librbs_core::SourceTag;
 use librbs_core::env::Environment;
-use librbs_core::env::entry::ClassLikeEntry;
+use librbs_core::env::entry::{ClassLikeEntry, DeclRef};
 use librbs_core::env::insert::insert_rbs_source;
-use librbs_core::env::resolution::{NodeId, ResolvedRef};
+use librbs_core::env::resolution::ResolvedRef;
 use librbs_core::resolver::driver::{lookup_decl, resolve};
 use librbs_core::source::Source;
 use ruby_rbs::node::Node;
@@ -41,26 +42,31 @@ fn build_env(rbs_sources: &[&str]) -> Environment {
 #[test]
 fn resolves_super_class_to_absolute_name() {
     // `class Foo` and `class Bar < Foo` — the `Foo` reference inside the
-    // super-class clause resolves to `::Foo`. With one source the
-    // resolution table holds exactly one entry (just the `Foo`
-    // reference, since `Foo` itself has no super-class).
+    // super-class clause resolves to `::Foo`. The resolution side-table
+    // therefore holds one slice for `Bar`'s `DeclRef` containing one
+    // `Resolved(::Foo)` entry; `Foo`'s own `DeclRef` has no slice
+    // because `Foo` has no super-class and no other type-name references.
     let mut env = build_env(&[r#"class Foo end
 class Bar < Foo end
 "#]);
     let resolution = resolve(&mut env, None);
 
     assert_eq!(resolution.len(), 1);
-    let entry = resolution
-        .type_name_resolutions
-        .get(&NodeId::new(0, 0))
-        .expect("first NodeId should be the super-class reference");
+    let bar_decl = DeclRef {
+        source_index: 0,
+        decl_index: 1,
+    };
+    let slice = resolution
+        .get(bar_decl)
+        .expect("Bar's super-class reference should be in the resolution");
+    assert_eq!(slice.len(), 1);
     let foo_sym = env
         .class_decls
         .keys()
         .find(|k| env.interner.to_string(**k) == "::Foo")
         .copied()
         .unwrap();
-    assert_eq!(*entry, ResolvedRef::Resolved(foo_sym));
+    assert_eq!(slice[0], ResolvedRef::Resolved(foo_sym));
 }
 
 #[test]
@@ -68,12 +74,13 @@ fn unknown_super_class_is_recorded_as_unresolved() {
     let mut env = build_env(&[r#"class Foo < Unknown end"#]);
     let resolution = resolve(&mut env, None);
 
-    let entry = resolution
-        .type_name_resolutions
-        .get(&NodeId::new(0, 0))
-        .copied()
-        .unwrap();
-    match entry {
+    let foo_decl = DeclRef {
+        source_index: 0,
+        decl_index: 0,
+    };
+    let slice = resolution.get(foo_decl).unwrap();
+    assert_eq!(slice.len(), 1);
+    match slice[0] {
         ResolvedRef::Unresolved(sym) => {
             assert_eq!(env.interner.to_string(sym), "Unknown");
         }
@@ -92,12 +99,9 @@ fn magic_comment_disables_resolution_for_that_source() {
     let resolution = resolve(&mut env, None);
 
     assert!(
-        resolution
-            .type_name_resolutions
-            .keys()
-            .all(|id| id.source_index == 1),
+        resolution.iter().all(|(dr, _)| dr.source_index == 1),
         "no entries should come from source 0; got {:?}",
-        resolution.type_name_resolutions.keys().collect::<Vec<_>>()
+        resolution.iter().map(|(dr, _)| dr).collect::<Vec<_>>()
     );
     assert_eq!(resolution.len(), 1);
 }
@@ -129,7 +133,10 @@ class Bar < Base end
         .find(|k| env.interner.to_string(**k) == "::Base")
         .copied()
         .unwrap();
-    let resolved: Vec<ResolvedRef> = resolution.type_name_resolutions.values().copied().collect();
+    let resolved: Vec<ResolvedRef> = resolution
+        .iter()
+        .flat_map(|(_, slice)| slice.iter().copied())
+        .collect();
     assert_eq!(resolved.len(), 1, "only Bar's super-class should resolve");
     assert_eq!(resolved[0], ResolvedRef::Resolved(base_sym));
 }

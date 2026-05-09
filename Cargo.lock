@@ -184,6 +184,7 @@ dependencies = [
  "rb-sys",
  "rb-sys-env",
  "rb-sys-test-helpers",
+ "ruby-rbs",
  "rustc-hash",
 ]
 

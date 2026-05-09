@@ -116,10 +116,29 @@ through to `super()`.
 
 ### Cleanup
 
-- Remove every `_materialize_first_*` test entry registered in
-  M3e/M3f/M3g.
-- Remove any temporary helper Ruby code (e.g. the M3e PR-#10
+- Delete the entire `m3e_test_entries` module in
+  `ext/librbs/src/lib.rs` (helpers `first_decl_name` /
+  `first_decl_super_name` plus the `materialize_first_*` /
+  `materialize_all_decl_locations` functions). The module is wrapped
+  with `// ===== M3e temporary test-entry harness =====` markers for
+  easy grep.
+- Remove the four `_materialize_*` singleton method registrations
+  from `init`.
+- Remove any other temporary helper Ruby code (e.g. the M3e PR-#10
   `_materialize!` shortcut, if it was reintroduced experimentally).
+- Delete the M3e test specs that depend on the removed entries
+  (`spec/unit/materialize_location_spec.rb` and
+  `spec/unit/materialize_type_name_spec.rb`); the equivalent
+  end-to-end coverage moves to M3h's `spec/unit/materialize_spec.rb`
+  + the canonical-dump compat tests.
+- Demote `librbs_core::env::insert::intern_type_name_node` from `pub`
+  back to `pub(crate)`. It was bumped to `pub` in M3e solely so the
+  `m3e_test_entries` module (in the `ext/librbs` crate) could intern
+  the AST name of a freshly-walked decl. Once that module is gone,
+  the only callers are `env::insert` and `resolver::driver` — both
+  inside `librbs-core` — so crate-private visibility is sufficient.
+  (Do **not** confuse with `is_decl_node`, which was reverted to
+  `pub(crate)` in PR #13 already.)
 
 ### Tests
 

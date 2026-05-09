@@ -1,38 +1,21 @@
-//! `Resolution` is the side-table that records, for every type-name
-//! occurrence in the AST, which fully-qualified name it resolves to.
+//! Per-decl `Resolution` side-table.
 //!
-//! Built per-source by the M3b driver and merged into a single map at the
-//! end. Keeping the table outside the AST lets us run resolution in
-//! parallel without needing a `&mut` to ruby-rbs's parser-owned tree.
+//! For every type-name occurrence the resolver visits inside a single
+//! declaration, the resolved (or unresolved) target is pushed onto a
+//! `Vec<ResolvedRef>` keyed by that declaration's [`DeclRef`]. The
+//! per-decl ordering matches the resolver's pre-order walk — the same
+//! order the materializer (M3f–M3h) walks each decl's subtree — so the
+//! materializer can consume resolutions one-by-one as it encounters
+//! type-name nodes, without needing a positional ID on each AST node.
+//!
+//! This replaces the earlier `(source_index, serial)`-keyed `NodeId`
+//! scheme: `*_decls` is the natural iteration unit for materialization,
+//! so resolutions are best stored alongside it.
 
 use rustc_hash::FxHashMap;
 
+use crate::env::entry::DeclRef;
 use crate::interner::TypeNameSym;
-
-/// Identifies one type-name occurrence in the parsed AST.
-///
-/// `serial` is assigned by a deterministic pre-order walk of each source's
-/// declarations — the same walk in different runs produces the same
-/// numbers. Two occurrences in different sources never collide because
-/// `source_index` is included.
-///
-/// `serial` was chosen over the parsed AST's byte offset because
-/// `ruby-rbs` does not currently expose a stable per-node offset; if that
-/// changes the underlying field can be swapped without breaking callers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeId {
-    pub source_index: u32,
-    pub serial: u32,
-}
-
-impl NodeId {
-    pub fn new(source_index: u32, serial: u32) -> Self {
-        Self {
-            source_index,
-            serial,
-        }
-    }
-}
 
 /// One resolution outcome. `Resolved` is the absolute `TypeNameSym` the
 /// occurrence binds to. `Unresolved` carries the *original* (pre-resolve)
@@ -46,7 +29,10 @@ pub enum ResolvedRef {
 
 #[derive(Debug, Default)]
 pub struct Resolution {
-    pub type_name_resolutions: FxHashMap<NodeId, ResolvedRef>,
+    /// Resolved type-name occurrences for each declaration, in the
+    /// resolver's pre-order. Private — callers go through [`record`],
+    /// [`get`], [`iter`], [`len`], [`is_empty`].
+    entries: FxHashMap<DeclRef, Vec<ResolvedRef>>,
 }
 
 impl Resolution {
@@ -54,36 +40,37 @@ impl Resolution {
         Self::default()
     }
 
-    pub fn record(&mut self, id: NodeId, resolved: ResolvedRef) {
-        debug_assert!(
-            !self.type_name_resolutions.contains_key(&id),
-            "duplicate NodeId in Resolution: {:?}",
-            id
-        );
-        self.type_name_resolutions.insert(id, resolved);
+    /// Record one resolution outcome for `decl_ref`. The resolver
+    /// records once per type-name occurrence in pre-order; the
+    /// materializer reads the recorded slice back via [`get`] in the
+    /// same order.
+    pub fn record(&mut self, decl_ref: DeclRef, resolved: ResolvedRef) {
+        self.entries.entry(decl_ref).or_default().push(resolved);
     }
 
-    /// Merge another `Resolution` into this one. Used by the M3b driver to
-    /// fold per-source results back together. Panics in debug builds if a
-    /// `NodeId` appears in both — that would indicate a bug in NodeId
-    /// allocation rather than a legitimate overlap.
-    pub fn merge(&mut self, other: Resolution) {
-        for (id, resolved) in other.type_name_resolutions {
-            debug_assert!(
-                !self.type_name_resolutions.contains_key(&id),
-                "duplicate NodeId during Resolution::merge: {:?}",
-                id
-            );
-            self.type_name_resolutions.insert(id, resolved);
-        }
+    /// Look up the recorded resolution slice for `decl_ref`. Returns
+    /// `None` when the decl had no type-name occurrences (nothing was
+    /// recorded) or was skipped during resolution (`only:` filter, or
+    /// the `# resolve-type-names: false` magic comment short-circuited
+    /// the whole source).
+    pub fn get(&self, decl_ref: DeclRef) -> Option<&[ResolvedRef]> {
+        self.entries.get(&decl_ref).map(Vec::as_slice)
     }
 
+    /// Iterate over every recorded `(DeclRef, &[ResolvedRef])` pair.
+    /// Order is unspecified (the underlying map is hashed).
+    pub fn iter(&self) -> impl Iterator<Item = (DeclRef, &[ResolvedRef])> + '_ {
+        self.entries.iter().map(|(k, v)| (*k, v.as_slice()))
+    }
+
+    /// Total resolution count across all decls. Mostly useful for
+    /// tests; the materializer never needs the global count.
     pub fn len(&self) -> usize {
-        self.type_name_resolutions.len()
+        self.entries.values().map(Vec::len).sum()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.type_name_resolutions.is_empty()
+        self.len() == 0
     }
 }
 
@@ -92,24 +79,46 @@ mod tests {
     use super::*;
     use crate::interner::TypeNameSym;
 
-    #[test]
-    fn merge_combines_disjoint_resolutions() {
-        let mut a = Resolution::new();
-        let mut b = Resolution::new();
-        a.record(NodeId::new(0, 0), ResolvedRef::Resolved(TypeNameSym(1)));
-        b.record(NodeId::new(0, 1), ResolvedRef::Unresolved(TypeNameSym(2)));
-        a.merge(b);
-        assert_eq!(a.len(), 2);
+    fn dr(source_index: u32, decl_index: u32) -> DeclRef {
+        DeclRef {
+            source_index,
+            decl_index,
+        }
     }
 
     #[test]
-    #[should_panic(expected = "duplicate NodeId")]
-    fn merge_panics_on_duplicate_node_id_in_debug() {
-        let mut a = Resolution::new();
-        let mut b = Resolution::new();
-        let id = NodeId::new(0, 0);
-        a.record(id, ResolvedRef::Resolved(TypeNameSym(1)));
-        b.record(id, ResolvedRef::Resolved(TypeNameSym(2)));
-        a.merge(b);
+    fn record_appends_in_call_order() {
+        let mut r = Resolution::new();
+        r.record(dr(0, 0), ResolvedRef::Resolved(TypeNameSym(1)));
+        r.record(dr(0, 0), ResolvedRef::Unresolved(TypeNameSym(2)));
+        let slice = r.get(dr(0, 0)).unwrap();
+        assert_eq!(slice.len(), 2);
+        assert_eq!(slice[0], ResolvedRef::Resolved(TypeNameSym(1)));
+        assert_eq!(slice[1], ResolvedRef::Unresolved(TypeNameSym(2)));
+    }
+
+    #[test]
+    fn get_returns_none_for_unrecorded_decl_ref() {
+        let mut r = Resolution::new();
+        r.record(dr(0, 0), ResolvedRef::Resolved(TypeNameSym(1)));
+        assert!(r.get(dr(0, 1)).is_none());
+        assert!(r.get(dr(1, 0)).is_none());
+    }
+
+    #[test]
+    fn len_sums_across_decls() {
+        let mut r = Resolution::new();
+        r.record(dr(0, 0), ResolvedRef::Resolved(TypeNameSym(1)));
+        r.record(dr(0, 1), ResolvedRef::Resolved(TypeNameSym(2)));
+        r.record(dr(0, 1), ResolvedRef::Resolved(TypeNameSym(3)));
+        assert_eq!(r.len(), 3);
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn empty_resolution_is_empty_and_zero_len() {
+        let r = Resolution::new();
+        assert!(r.is_empty());
+        assert_eq!(r.len(), 0);
     }
 }
