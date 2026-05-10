@@ -1,29 +1,86 @@
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
 
-pub mod entry;
 pub mod insert;
 pub mod resolution;
 pub mod use_map;
-
-pub use entry::{ClassAliasEntry, ClassLikeEntry};
 
 use crate::discovery::Loader;
 use crate::error::{Error, Result};
 use crate::interner::{Sym, TypeNameInterner, TypeNameSym};
 use crate::source::Source;
 
+/// A reference to a particular declaration node, identifying its source
+/// file and the index within that file's declaration list (the index is
+/// pre-order over nested declarations).
+///
+/// Keys the per-decl `Resolution` side-table: the resolver assigns one
+/// `DeclRef` per visited declaration in `env::insert::insert_rbs_source`
+/// pre-order, and the materializer (in the `ext/librbs` crate) walks the
+/// same order to read the recorded slice back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeclRef {
+    pub source_index: u32,
+    pub decl_index: u32,
+}
+
+/// `Resolver::context` equivalent: a chain of namespace nodes, leading from
+/// the outermost (None) inward.
+pub type Context = Vec<TypeNameSym>;
+
+/// Payload for a class/module alias entry. The resolver reads
+/// `(old_name, context)` to seed `TypeNameResolver::aliases`. The
+/// `Class`/`Module` distinction upstream RBS makes between
+/// `ClassAlias` and `ModuleAlias` is not consulted here, so a single
+/// struct covers both.
+#[derive(Debug)]
+pub struct ClassAliasEntry {
+    pub old_name: TypeNameSym,
+    pub context: Context,
+}
+
+/// Unified entry stored in `Environment::decls` for every type-name
+/// declaration. Class/module/interface/type-alias/constant variants
+/// carry no payload — their identity is fully captured by the
+/// `TypeNameSym` key (which already encodes `TypeNameKind`). Only
+/// `ClassAlias` carries data, and is boxed so the enum stays small
+/// (one word for the tag + one word for the pointer).
+#[derive(Debug)]
+pub enum DeclEntry {
+    Class,
+    Module,
+    Interface,
+    TypeAlias,
+    Constant,
+    ClassAlias(Box<ClassAliasEntry>),
+}
+
+impl DeclEntry {
+    /// Whether this decl contributes a name to the resolver's
+    /// "all known type names" set. Class/module/interface/type-alias
+    /// names are resolvable; constants and class aliases are not
+    /// (aliases feed `TypeNameResolver::aliases` separately).
+    pub fn is_resolvable(&self) -> bool {
+        matches!(
+            self,
+            DeclEntry::Class | DeclEntry::Module | DeclEntry::Interface | DeclEntry::TypeAlias
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct Environment {
     pub interner: TypeNameInterner,
     pub sources: Vec<Source>,
-    pub class_decls: HashMap<TypeNameSym, ClassLikeEntry>,
-    pub interface_decls: FxHashSet<TypeNameSym>,
-    pub type_alias_decls: FxHashSet<TypeNameSym>,
-    pub constant_decls: FxHashSet<TypeNameSym>,
-    pub class_alias_decls: HashMap<TypeNameSym, ClassAliasEntry>,
+    /// All type-name declarations (class, module, interface, type alias,
+    /// constant, class/module alias) keyed by their interned absolute
+    /// `TypeNameSym`. The variant disambiguates the kind; payload only
+    /// exists for aliases.
+    pub decls: FxHashMap<TypeNameSym, DeclEntry>,
+    /// Global variable declarations. Keyed by `Sym` (string symbol)
+    /// rather than `TypeNameSym` because globals don't live in the
+    /// type-name namespace.
     pub global_decls: FxHashSet<Sym>,
 }
 
@@ -38,11 +95,7 @@ impl Environment {
         Self {
             interner: TypeNameInterner::new(),
             sources: Vec::new(),
-            class_decls: HashMap::new(),
-            interface_decls: FxHashSet::default(),
-            type_alias_decls: FxHashSet::default(),
-            constant_decls: FxHashSet::default(),
-            class_alias_decls: HashMap::new(),
+            decls: FxHashMap::default(),
             global_decls: FxHashSet::default(),
         }
     }

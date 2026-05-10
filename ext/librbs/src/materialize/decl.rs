@@ -20,7 +20,7 @@
 
 use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
 
-use librbs_core::env::entry::DeclRef;
+use librbs_core::env::DeclRef;
 use librbs_core::env::insert::{find_type_name_node, is_decl_node};
 use librbs_core::interner::{NamespaceSym, TypeNameSym};
 use ruby_rbs::node::{

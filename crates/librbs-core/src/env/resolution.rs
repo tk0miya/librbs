@@ -14,7 +14,7 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::env::entry::DeclRef;
+use crate::env::DeclRef;
 use crate::interner::TypeNameSym;
 
 /// One resolution outcome. `Resolved` is the absolute `TypeNameSym` the

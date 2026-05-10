@@ -2,6 +2,14 @@ use std::path::PathBuf;
 
 use librbs_core::Environment;
 use librbs_core::discovery::{Loader, Repository};
+use librbs_core::env::DeclEntry;
+
+fn class_count(env: &Environment) -> usize {
+    env.decls
+        .values()
+        .filter(|e| matches!(e, DeclEntry::Class | DeclEntry::Module))
+        .count()
+}
 
 fn vendor_rbs() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -28,11 +36,8 @@ fn parses_every_core_file() {
     let mut loader = Loader::with_core_root(vendor_rbs().join("core"));
     let env = Environment::from_loader(&mut loader).unwrap();
     assert!(!env.sources.is_empty());
-    assert!(
-        env.class_decls.len() > 30,
-        "got {} class_decls",
-        env.class_decls.len()
-    );
+    let count = class_count(&env);
+    assert!(count > 30, "got {count} class/module decls");
 }
 
 #[test]
@@ -51,8 +56,8 @@ fn loads_core_plus_stdlib() {
         loader.add_library(name, None);
     }
     let env = Environment::from_loader(&mut loader).unwrap();
-    let count = env.class_decls.len();
-    assert!(count > 100, "expected >100 class_decls, got {count}");
+    let count = class_count(&env);
+    assert!(count > 100, "expected >100 class/module decls, got {count}");
 }
 
 #[test]
@@ -67,9 +72,10 @@ fn resolves_full_core_environment() {
     // verified on the Ruby side from M3c onward.
     assert!(res.len() > 1000, "got {} resolutions", res.len());
     assert!(
-        env.class_decls
-            .keys()
-            .any(|k| env.interner.to_string(*k) == "::Object"),
+        env.decls
+            .iter()
+            .filter(|(_, e)| matches!(e, DeclEntry::Class | DeclEntry::Module))
+            .any(|(k, _)| env.interner.to_string(*k) == "::Object"),
         "expected ::Object entry to be present"
     );
 }
@@ -78,10 +84,7 @@ fn resolves_full_core_environment() {
 fn deterministic_counts() {
     let count_run = || {
         let mut loader = Loader::with_core_root(vendor_rbs().join("core"));
-        Environment::from_loader(&mut loader)
-            .unwrap()
-            .class_decls
-            .len()
+        class_count(&Environment::from_loader(&mut loader).unwrap())
     };
     let a = count_run();
     let b = count_run();

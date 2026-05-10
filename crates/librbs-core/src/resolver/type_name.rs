@@ -17,8 +17,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::env::Environment;
-use crate::env::entry::Context;
+use crate::env::{Context, DeclEntry, Environment};
 use crate::interner::{FrozenInterner, Sym, TypeNameKind, TypeNameSym};
 
 #[derive(Debug)]
@@ -34,13 +33,20 @@ impl TypeNameResolver {
     /// alias decls (`new_name → (old_name, context)`).
     pub fn build(env: &Environment) -> Self {
         let mut all_names: FxHashSet<TypeNameSym> = FxHashSet::default();
-        all_names.extend(env.class_decls.keys().copied());
-        all_names.extend(env.interface_decls.iter().copied());
-        all_names.extend(env.type_alias_decls.iter().copied());
-
         let mut aliases: FxHashMap<TypeNameSym, (TypeNameSym, Context)> = FxHashMap::default();
-        for (&name, entry) in &env.class_alias_decls {
-            aliases.insert(name, (entry.old_name, entry.context.clone()));
+        for (&name, entry) in &env.decls {
+            match entry {
+                DeclEntry::Class
+                | DeclEntry::Module
+                | DeclEntry::Interface
+                | DeclEntry::TypeAlias => {
+                    all_names.insert(name);
+                }
+                DeclEntry::ClassAlias(alias) => {
+                    aliases.insert(name, (alias.old_name, alias.context.clone()));
+                }
+                DeclEntry::Constant => {}
+            }
         }
 
         Self {
@@ -282,8 +288,7 @@ impl TypeNameResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::Environment;
-    use crate::env::entry::{ClassAliasEntry, ClassLikeEntry};
+    use crate::env::{ClassAliasEntry, Environment};
     use crate::interner::{TypeNameInterner, TypeNameKind};
 
     fn intern_class(
@@ -311,11 +316,11 @@ mod tests {
     }
 
     fn add_class(env: &mut Environment, name: TypeNameSym) {
-        env.class_decls.insert(name, ClassLikeEntry::Class);
+        env.decls.insert(name, DeclEntry::Class);
     }
 
     fn add_interface(env: &mut Environment, name: TypeNameSym) {
-        env.interface_decls.insert(name);
+        env.decls.insert(name, DeclEntry::Interface);
     }
 
     fn add_class_alias(
@@ -324,8 +329,10 @@ mod tests {
         old_name: TypeNameSym,
         context: Context,
     ) {
-        env.class_alias_decls
-            .insert(new_name, ClassAliasEntry { old_name, context });
+        env.decls.insert(
+            new_name,
+            DeclEntry::ClassAlias(Box::new(ClassAliasEntry { old_name, context })),
+        );
     }
 
     #[test]
