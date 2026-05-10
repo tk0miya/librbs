@@ -6,114 +6,110 @@
 //! ruby-rbs adds these accessors); no byte → char conversion happens
 //! on the Rust side.
 //!
-//! Sub-location construction is **deferred**. Instead of dispatching
-//! `RBS::Location#add_required_child` / `add_optional_child` per child
-//! at materialise time (each call: build a Range object + Ruby method
-//! dispatch into a C-defined `_add_*_child`), we push a row onto the
-//! Location's `@__librbs_pending_children` Array and let
-//! `Librbs::Patches::Location` realise it the first time any reader
-//! method (`[]`, `each_required_key`, `_required_keys`, `inspect`, …)
-//! runs. For the load + resolve + `add_source` path no such reader
-//! runs, so the children never get built — saving ~5–7 funcalls per
-//! Location across ~60K Locations per materialise.
+//! `RBS::Location` construction is **deferred entirely**. Instead of
+//! allocating a real `RBS::Location` per node and dispatching 5–7
+//! `add_required_child` / `add_optional_child` calls, the native side
+//! returns a Ruby `Array` "spec" that represents the location:
 //!
-//! Row encoding (matches `lib/librbs/patches/location.rb`):
-//!   [:required,         <name Symbol>, <Integer start>, <Integer end>]
-//!   [:optional_present, <name Symbol>, <Integer start>, <Integer end>]
-//!   [:optional_absent,  <name Symbol>]
+//!   [buffer, start, end]                  (no children)
+//!   [buffer, start, end, children_flat]   (with children)
+//!
+//! `children_flat` is a flat Array of 4-tuples `(kind_sym, name_sym,
+//! start_or_nil, end_or_nil)`. The spec is passed verbatim into the
+//! upstream class initializer as the `location:` kwarg, where it lands
+//! in `@location`. `Librbs::Patches::LazyLocation`'s prepended
+//! `location` reader detects the Array form on first access and
+//! realises the real `RBS::Location` (and its children) lazily.
+//!
+//! For the load + resolve + `add_source` path no caller reads
+//! `.location`, so the realiser never runs — saving ~60K
+//! `RBS::Location.new` allocations and ~300K `_add_*_child` C-side
+//! calls per materialise.
 
-use magnus::{Error, RArray, RTypedData, TryConvert, Value, prelude::*, value::ReprValue};
+use magnus::{Error, RArray, TryConvert, Value, value::ReprValue};
 
 use ruby_rbs::node::RBSLocationRange;
 
 use crate::materialize::MaterializeCtx;
 use crate::materialize::phase_timer::{Phase, PhaseTimer};
 
-const PENDING_IVAR: &str = "@__librbs_pending_children";
-
-/// `RBS::Location.new(buffer, start_char, end_char)` for the current
-/// source. Reads the active buffer from [`MaterializeCtx::buffer`].
+/// Build a deferred-Location spec Array `[buffer, start, end]` for
+/// `range`. The returned `Value` is a Ruby `Array` (not an
+/// `RBS::Location`); pass it through to the upstream class
+/// initializer as the `location:` kwarg. The lazy reader prepended on
+/// each RBS class converts it on first access (see
+/// `lib/librbs/patches/location.rb`).
 pub fn make_location(ctx: &MaterializeCtx<'_>, range: &RBSLocationRange) -> Result<Value, Error> {
     let _t = PhaseTimer::new(Phase::Location);
-    let buffer = ctx.buffer();
-    let start = range.start_char();
-    let end = range.end_char();
-    Ok(ctx
-        .classes
-        .location
-        .new_instance((buffer, start, end))?
-        .as_value())
+    let arr = ctx.ruby.ary_new_capa(3);
+    arr.push(ctx.buffer())?;
+    arr.push(range.start_char())?;
+    arr.push(range.end_char())?;
+    Ok(arr.as_value())
 }
 
-/// Get-or-create the deferred child queue stashed on `loc`. `RBS::Location`
-/// is `T_DATA` (C-extension `TypedData`); `RTypedData` implements
-/// magnus's `Object` trait so we can call `ivar_get` / `ivar_set`
-/// directly into Ruby's `rb_ivar_get` / `rb_ivar_set` (no Ruby-method
-/// dispatch).
-fn pending_children(ctx: &MaterializeCtx<'_>, loc: Value) -> Result<RArray, Error> {
-    let typed = RTypedData::from_value(loc).ok_or_else(|| {
-        magnus::Error::new(ctx.ruby.exception_type_error(), "Location is not TypedData")
-    })?;
-    let v: Value = typed.ivar_get(PENDING_IVAR)?;
-    if v.is_nil() {
-        let arr = ctx.ruby.ary_new();
-        typed.ivar_set(PENDING_IVAR, arr.as_value())?;
-        Ok(arr)
+/// Lazily attach (or fetch) the children sub-array on a deferred
+/// location spec. The first time a child is added, the spec grows
+/// from `[buffer, start, end]` to `[buffer, start, end, children]`.
+fn ensure_children(ctx: &MaterializeCtx<'_>, spec: RArray) -> Result<RArray, Error> {
+    if spec.len() < 4 {
+        let c = ctx.ruby.ary_new();
+        spec.push(c.as_value())?;
+        Ok(c)
     } else {
-        RArray::try_convert(v)
+        RArray::try_convert(spec.entry::<Value>(3)?)
     }
 }
 
 /// Push a deferred required-child row onto `loc`. Mirrors
-/// `RBS::Location#add_required_child(name, range)` semantically, but
-/// without the per-call funcall (see module docs).
+/// `RBS::Location#add_required_child(name, range)` semantically; the
+/// row is realised by the lazy reader the first time someone reads
+/// `.location`.
 ///
-/// Intentionally untimed: 1.5M+ invocations per materialise would
-/// turn the ~100 ns `PhaseTimer` into a multi-hundred-ms phantom
-/// charge. The work is included in the parent (member / declaration
-/// / method_type) phase's self-time instead.
+/// Intentionally untimed: ~1 M invocations per materialise would
+/// dwarf real cost with `PhaseTimer` overhead.
 pub fn add_required_child(
     ctx: &MaterializeCtx<'_>,
     loc: Value,
     name: &str,
     range: &RBSLocationRange,
 ) -> Result<(), Error> {
-    let pending = pending_children(ctx, loc)?;
-    let row = ctx.ruby.ary_new_capa(4);
-    row.push(ctx.ruby.to_symbol("required"))?;
-    row.push(ctx.ruby.to_symbol(name))?;
-    row.push(range.start_char())?;
-    row.push(range.end_char())?;
-    pending.push(row)?;
+    let spec = RArray::try_convert(loc)?;
+    let children = ensure_children(ctx, spec)?;
+    children.push(ctx.ruby.to_symbol("required"))?;
+    children.push(ctx.ruby.to_symbol(name))?;
+    children.push(range.start_char())?;
+    children.push(range.end_char())?;
     Ok(())
 }
 
 /// Push a deferred optional-child row onto `loc`. `None` materialises
 /// as `:optional_absent` (mirroring `_add_optional_no_child`); `Some`
-/// materialises as `:optional_present` with the range bounds.
+/// materialises as `:optional_present` with the range bounds. Both
+/// variants emit 4 elements so the realiser can `each_slice(4)`
+/// uniformly.
 pub fn add_optional_child(
     ctx: &MaterializeCtx<'_>,
     loc: Value,
     name: &str,
     range: Option<&RBSLocationRange>,
 ) -> Result<(), Error> {
-    let pending = pending_children(ctx, loc)?;
-    let row = match range {
+    let spec = RArray::try_convert(loc)?;
+    let children = ensure_children(ctx, spec)?;
+    let nil = ctx.ruby.qnil().as_value();
+    match range {
         Some(r) => {
-            let row = ctx.ruby.ary_new_capa(4);
-            row.push(ctx.ruby.to_symbol("optional_present"))?;
-            row.push(ctx.ruby.to_symbol(name))?;
-            row.push(r.start_char())?;
-            row.push(r.end_char())?;
-            row
+            children.push(ctx.ruby.to_symbol("optional_present"))?;
+            children.push(ctx.ruby.to_symbol(name))?;
+            children.push(r.start_char())?;
+            children.push(r.end_char())?;
         }
         None => {
-            let row = ctx.ruby.ary_new_capa(2);
-            row.push(ctx.ruby.to_symbol("optional_absent"))?;
-            row.push(ctx.ruby.to_symbol(name))?;
-            row
+            children.push(ctx.ruby.to_symbol("optional_absent"))?;
+            children.push(ctx.ruby.to_symbol(name))?;
+            children.push(nil)?;
+            children.push(nil)?;
         }
-    };
-    pending.push(row)?;
+    }
     Ok(())
 }
