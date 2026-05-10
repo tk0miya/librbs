@@ -13,7 +13,6 @@
 *.a
 mkmf.log
 target/
-/flamegraph_*.svg
 
 # rspec failure tracking
 .rspec_status
