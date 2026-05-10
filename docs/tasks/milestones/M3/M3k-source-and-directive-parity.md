@@ -49,8 +49,7 @@ Why this is the right shape:
   `RBS::Environment` materialises by feeding `add_source` the same
   way; upstream's own `resolve_type_names` does exactly that.
 
-The cutover is split into one Rust foundation PR (additive,
-Ruby-invisible) followed by three Ruby-side PRs.
+The cutover lands as three Ruby-side PRs.
 
 ## Prerequisites
 
@@ -108,108 +107,41 @@ again as their own `*Entry`. The `add_source`-based cutover in this
 slice fixes both cases as a side-effect of using upstream's
 indexing.
 
-### Rust-side gap
+### Directive sourcing
 
-The Rust `Environment` / `Source` (`crates/librbs-core/src/source.rs`,
-`env/mod.rs`) currently model only `*_decls` and the raw parsed AST.
-There is no Rust-side analogue to `Source::RBS#directives`: the
-resolver walks `parser.signature().directives()` for `Use` clauses
-ad-hoc. R2 introduces an owned `Vec<Directive>` so directives can be
-consumed by both the resolver and the Y1 directive materialiser
-without re-walking the AST.
+Directives (`# use ...` and the `# resolve-type-names: ...` magic
+comment) are not pre-collected on the Rust side. The resolver
+already walks `parser.signature().directives()` for `Use` clauses
+and scans `source.buffer.content` for the magic comment; the Y1
+directive materialiser does the same walk plus the same magic-
+comment scan to recover `ResolveTypeNames`. Wildcard expansion
+fundamentally happens at resolve time (`table.children` is unknown
+until every source is inserted), so introducing an owned
+`Vec<Directive>` would only pre-intern single-clause targets while
+leaving the resolver's per-clause loop in place — not enough to
+justify the extra type and indirection.
 
 ## Implementation plan
 
-The slice lands as one Rust-side foundation PR (R2) followed by
-three Ruby-side PRs (Y1–Y3).
+The slice lands as three Ruby-side PRs (Y1–Y3). No Rust-core
+changes are needed; the materialiser drives directive
+construction directly off the AST and the source content.
 
-### Phase 1: Rust foundation
-
-#### PR R2: Rust `Directive` types + `Source::directives`
-
-Mirror upstream's directive AST in owned Rust form, and switch the
-resolver off raw-AST walking onto this owned representation.
-
-Files:
-
-- `crates/librbs-core/src/directive.rs` (new) or appended to
-  `source.rs`:
-
-  ```rust
-  pub enum Directive {
-      Use(UseDirective),
-      ResolveTypeNames(ResolveTypeNamesDirective),
-  }
-
-  pub struct UseDirective {
-      pub clauses: Vec<UseClause>,
-      pub location: AstLocation,
-  }
-
-  pub enum UseClause {
-      Single {
-          type_name: TypeNameSym,
-          new_name: Option<Sym>,
-          location: AstLocation,
-      },
-      Wildcard {
-          namespace: NamespaceSym,
-          location: AstLocation,
-      },
-  }
-
-  pub struct ResolveTypeNamesDirective {
-      pub value: bool,
-      pub location: AstLocation,
-  }
-  ```
-
-  `AstLocation` carries a position pair (`start: u32, end: u32`),
-  matching what the AST nodes expose. All names are interned through
-  the existing `TypeNameInterner` / `Sym` infrastructure — directives
-  carry no borrowed AST data, so `Source::directives` can be moved
-  freely.
-
-- `crates/librbs-core/src/source.rs`: add
-  `pub directives: Vec<Directive>` to `Source`.
-
-- `crates/librbs-core/src/env/insert.rs::insert_rbs_source`: also
-  walk `signature().directives()` and return the populated
-  `Vec<Directive>` (`Result<Vec<Directive>>` instead of the current
-  `Result<()>`). `Use` clause `type_name`s are already absolute by
-  C-parser invariant, so interning is a direct lookup.
-
-- `crates/librbs-core/src/env/mod.rs::from_loader`: receive the
-  per-source `Vec<Directive>` from `insert_rbs_source` and write it
-  into the matching `Source::directives` before moving sources into
-  `env`.
-
-- `crates/librbs-core/src/resolver/driver.rs::apply_use_directive`:
-  consume from `&source.directives` instead of walking the AST.
-  Behaviour must be byte-for-byte identical (verified by existing
-  resolver tests).
-
-Tests:
-
-- Per-fixture: directive count, variant, and contents match
-  expectations (a single `Use` with mixed clauses,
-  `ResolveTypeNames` with both `true` and `false`).
-- Resolver tests stay green (no behaviour change).
-
-Ruby surface: unchanged. The Ruby materialiser does not yet consult
-`Source::directives`; that wiring lands in PR Y1.
-
-### Phase 2: Ruby cutover
-
-#### PR Y1: Directives materialiser
+### PR Y1: Directives materialiser
 
 Files:
 
 - `ext/librbs/src/materialize/directive.rs` (new): build
   `RBS::AST::Directives::Use` / `Use::SingleClause` /
   `Use::WildcardClause` / `RBS::AST::Directives::ResolveTypeNames`
-  from Rust `Directive` values. Locations go through the existing
-  `make_location` helper.
+  by walking `src.parser.signature().directives()` for `Use` nodes
+  and scanning `src.buffer.content` for the
+  `# resolve-type-names: true|false` magic comment (mirrors
+  `RBS::Parser.magic_comment`, `vendor/rbs/lib/rbs/parser_aux.rb:46-68`).
+  The magic-comment directive is prepended to the result list when
+  matched, matching upstream's `[resolve_type_names?, *use_dirs]`
+  ordering. Locations go through the existing `make_location`
+  helper.
 - Extract a shared `materialize_namespace` helper from
   `ext/librbs/src/materialize/type_name.rs` for use by
   `WildcardClause`.
@@ -225,7 +157,7 @@ Tests (`spec/unit/materialize_directives_spec.rb`):
 No wiring yet — `directive.rs` has no callers from materialisation
 proper. Completely additive on the Ruby side.
 
-#### PR Y2: `add_source`-based materialisation (cutover)
+### PR Y2: `add_source`-based materialisation (cutover)
 
 Replace M3h's direct `*_decls` ivar writes with per-source
 `Source::RBS` construction + an `add_source` call per source.
@@ -238,8 +170,10 @@ Files:
   env.sources`:
   1. Materialise the buffer (existing
      `MaterializeCtx::buffer()` cache).
-  2. Materialise directives from `&src.directives` (R2) via PR Y1's
-     `materialize/directive.rs` → `Array[RBS::AST::Directives::*]`.
+  2. Materialise directives via PR Y1's `materialize/directive.rs`
+     (walks `src.parser.signature().directives()` and scans
+     `src.buffer.content` for the magic comment) →
+     `Array[RBS::AST::Directives::*]`.
   3. Iterate `src.parser.signature().declarations()` (filtering
      non-decl nodes via `is_decl_node`) and recursively materialise
      each top-level decl via the existing per-AST-node materialisers
@@ -326,7 +260,7 @@ Rollback story: reverting Y2 returns the codebase to M3h's state
 (`*_decls` populated directly, `@sources` empty). No regression of
 existing functionality.
 
-#### PR Y3: Retire M3h's entry-construction code
+### PR Y3: Retire M3h's entry-construction code
 
 Y2 leaves M3h's `build_entries` / `process_class_like` / `process_*`
 unreferenced in production, since `materialize_all` no longer calls
@@ -402,11 +336,6 @@ followup gated on a real consumer needing it (Steep doesn't today).
 
 ## Acceptance
 
-Rust foundation:
-
-- [ ] `Source::directives: Vec<Directive>` populated by
-      `insert_rbs_source`; resolver consumes from this field.
-
 Ruby cutover:
 
 - [ ] `materialize_all` issues one `env.add_source(Source::RBS.new(…))`
@@ -432,7 +361,7 @@ Ruby cutover:
 - [ ] After Y3: M3h's `build_entries` / `process_*` / per-entry
       `materialize_*_decl` wrappers are removed; only the per-AST-node
       materialisers remain in `ext/librbs/src/materialize/decl.rs`.
-- [ ] CI green at every PR boundary (R2, Y1, Y2, Y3).
+- [ ] CI green at every PR boundary (Y1, Y2, Y3).
 
 ## References
 
@@ -447,11 +376,8 @@ Ruby cutover:
 - `ext/librbs/src/materialize/decl.rs` (current entry-driven walker;
   Y3 retires `build_entries` and `process_*`, keeps per-AST-node
   materialisers)
-- `crates/librbs-core/src/source.rs` (Rust Source / Buffer; R2 edit
-  target — adds `Source::directives`)
-- `crates/librbs-core/src/env/insert.rs::insert_rbs_source` (R2 edit
-  target — directive collection)
-- `crates/librbs-core/src/env/mod.rs::from_loader` (R2 edit target —
-  wires per-source `Vec<Directive>` into `Source`)
+- `crates/librbs-core/src/source.rs` (Rust Source / Buffer)
 - `crates/librbs-core/src/resolver/driver.rs::apply_use_directive`
-  (R2 edit target — switch from AST walk to `Source::directives`)
+  (existing AST-walk path the materialiser mirrors)
+- `vendor/rbs/lib/rbs/parser_aux.rb:46-68` (upstream magic-comment
+  scanner that Y1's `# resolve-type-names` matcher ports)
