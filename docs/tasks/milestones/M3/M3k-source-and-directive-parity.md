@@ -9,16 +9,57 @@ Close the remaining behavioral divergence between librbs-backed
 return the same shape, count, and — where upstream guarantees it —
 the same Ruby object identity as their pure-Ruby counterparts.
 
-This slice is purely about compatibility surface; no new resolver or
-materializer logic is added beyond directive nodes.
+## Background: design evolution and final approach
+
+The first draft of M3k assumed M3h would land as a source-driven
+materializer; the realised M3h is **entry-driven** (`build_entries`
+iterates `env.*_decls` and looks up each entry's AST via `DeclRef`
+independently). Bolting `source.declarations` on as a side-array would
+double-materialise nested decls and break the upstream identity
+invariant.
+
+The second draft proposed inverting the materialiser to be
+source-driven with a `DeclRef → Value` cache, then refactoring the
+entry walker into cache lookups. That works, but reproduces in Rust
+the indexing logic that upstream's `Environment#add_source` already
+implements in Ruby — at the cost of ~300 lines of `process_*` code
+plus a cache machinery, plus a multi-stage cutover.
+
+**This slice instead delegates `*_decls` indexing to upstream's
+`add_source` entirely.** The Rust side materialises Ruby decl objects
+and assembles `RBS::Source::RBS` instances; the Ruby side calls
+`add_source(source)` on each, letting upstream populate `@sources`,
+`@class_decls`, `@interface_decls`, … as it does for the pure-Ruby
+loader path. M3h's `build_entries` / `process_*` becomes dead code
+and is retired.
+
+Why this is the right shape:
+
+- **Identity invariant is automatic.** Upstream `add_source` registers
+  the same Ruby decl object in `source.declarations` and in the
+  matching `*_decls` Entry — at every nesting level. We get this for
+  free by using the upstream code path.
+- **Less code, less divergence.** `*_decls` ordering, hash semantics,
+  duplicate handling, and any future upstream changes flow through to
+  librbs without porting.
+- **Compat verification simplifies.** M3i / M3j parity reduces to "is
+  the `Source::RBS` we pass to `add_source` correct?" — a pure
+  AST → Ruby translation question with no `*_decls` shape concerns.
+- **Resolved-env path is the same as fresh-env.** A resolved
+  `RBS::Environment` materialises by feeding `add_source` the same
+  way; upstream's own `resolve_type_names` does exactly that.
+
+The cutover is split into two Rust foundation PRs (additive,
+Ruby-invisible) followed by three Ruby-side PRs.
 
 ## Prerequisites
 
-- M3h merged (`*_decls` materialization + `materialize_all` cut-over).
+- M3h merged (`*_decls` materialisation + `materialize_all` cut-over).
 - Read [../M3-environment-and-resolver.md](../M3-environment-and-resolver.md)
   sections "Single lazy boundary" and "AST → Ruby conversion".
 - Read [./M3h-decls-and-cutover.md](./M3h-decls-and-cutover.md) — this
-  slice extends M3h's materialization session.
+  slice replaces M3h's entry-construction step with an `add_source`
+  call.
 
 ## Problem statement
 
@@ -34,8 +75,8 @@ librbs leaves empty today:
 `build_environment` (`ext/librbs/src/lib.rs`) calls
 `RBS::Environment#initialize` to set up the standard ivars, then
 attaches `@__librbs_handle`. `@sources` stays `[]` because the native
-side has no equivalent push path. `materialize_all` only writes the
-six `*_decls` ivars.
+side has no equivalent push path. M3h's `materialize_all` writes the
+six `*_decls` ivars directly without going through `add_source`.
 
 After `resolve_type_names`, upstream returns a fresh env whose
 `@sources` contains **new** `Source::RBS` / `Source::Ruby` instances
@@ -47,140 +88,317 @@ divergence persists across resolve.
 ### Object-identity invariant
 
 Upstream `add_source` registers the same Ruby decl object both in
-`source.declarations` and in the corresponding `*_decls` Entry:
+`source.declarations` and in the corresponding `*_decls` Entry, at
+**every nesting level**:
 
 ```ruby
+# top-level
 source.declarations[i].equal?(class_decls[name].decls[k].decl)  # → true
+# nested (a class declared inside a module)
+source.declarations[i_module].members[j].equal?(class_decls[Foo::Bar].decls[k].decl)  # → true
 ```
 
 `canonical_dump` does not observe this, but `Marshal.dump`,
 `inspect`, and any consumer that cross-references decls via two
 paths (Steep does this in some incremental flows) will diverge if
-materialization produces two distinct Ruby objects for the same
-logical decl.
+materialisation produces two distinct Ruby objects for the same
+logical decl. M3h's current entry walker breaks the nested case
+because it materialises nested decls once as parent's `members` and
+again as their own `*Entry`. The `add_source`-based cutover in this
+slice fixes both cases as a side-effect of using upstream's
+indexing.
 
-## Scope
+### Rust-side gap
 
-### `ext/librbs/src/materialize/directive.rs` (new)
+The Rust `Environment` / `Source` (`crates/librbs-core/src/source.rs`,
+`env/mod.rs`) currently model only `*_decls` and the raw parsed AST.
+There is no Rust-side analogue to `Source::RBS#declarations` (the
+top-level decl list) or `Source::RBS#directives`. Today's
+materialiser walks `parser.signature().declarations()` ad-hoc to find
+top-level nodes, and the resolver walks
+`parser.signature().directives()` for `Use` clauses. Neither is
+exposed as first-class state.
 
-Mirror the two AST node families in `vendor/rbs/lib/rbs/ast/directives.rb`:
+Mirroring those upstream fields in Rust is a prerequisite for the
+materialiser: the Ruby side iterates `Vec<DeclRef>` and
+`Vec<Directive>` from each `Source` to assemble each `Source::RBS`,
+not re-derive them from the AST every time.
 
-| Rust node (via `signature().directives()`) | Ruby class | Notes |
-|---|---|---|
-| `UseNode` | `RBS::AST::Directives::Use` | `clauses:` is an array of `SingleClause` / `WildcardClause`; `location:` covers the directive line |
-| `UseSingleClauseNode` | `RBS::AST::Directives::Use::SingleClause` | `type_name:` (absolutize via the same path as decls), `new_name:` (`Symbol` or `nil`), `location:` |
-| `UseWildcardClauseNode` | `RBS::AST::Directives::Use::WildcardClause` | `namespace:` (`RBS::Namespace`), `location:` |
-| `ResolveTypeNamesNode` | `RBS::AST::Directives::ResolveTypeNames` | `value:` (`true` / `false`), `location:` |
+## Implementation plan
 
-Directives are **not affected by `resolve_type_names`** — the
-`Use` clause's `type_name` is already absolute by C-parser invariant,
-and `ResolveTypeNames` carries a boolean. Materialize from the AST
-directly without consulting `Resolution`.
+The slice lands as two Rust-side foundation PRs (R1, R2) followed by
+three Ruby-side PRs (Y1–Y3).
 
-`RBS::Namespace` for `WildcardClause` is built from the upstream
-`Namespace.parse` shape (`"::Foo::Bar::"`); the existing `type_name`
-materializer already constructs `Namespace` values internally and
-that helper should be extracted / reused.
+### Phase 1: Rust foundation
 
-### `ext/librbs/src/materialize/source.rs` (new)
+#### PR R1: `Source::declarations`
 
-For each `librbs_core::source::Source`, build one of:
+Mirror `RBS::Source::RBS#declarations` in Rust. A per-source list of
+top-level `DeclRef`s, populated during loader-time AST insertion.
 
-```ruby
-RBS::Source::RBS.new(buffer, directives, declarations)
-RBS::Source::Ruby.new(buffer, prism_result, declarations, diagnostics)
-```
+Files:
 
-- `buffer`: reuse `MaterializeCtx::buffer()` (already cached per
-  source index — same identity as the buffer threaded through
-  `RBS::Location` materialization).
-- `directives`: built from the per-source directive walk above.
-- `declarations`: **the same Ruby `Value`s** that M3h's entry
-  construction step pushed into the `*_decls` Entries, in the
-  source's top-level pre-order. See "Identity invariant" below.
+- `crates/librbs-core/src/source.rs`: add
+  `pub declarations: Vec<DeclRef>` to `Source`. Initialize empty in
+  `Source::new`; the field is filled by `from_loader` after insert.
+- `crates/librbs-core/src/env/insert.rs::insert_rbs_source`: change
+  return type to `Result<Vec<DeclRef>>`. Inside the existing
+  `for decl in signature.declarations().iter()` loop, capture the
+  `DeclRef` that `assign_decl_index` will assign (= `{ source_index,
+  decl_index: counter }` at loop entry) and push into the returned
+  Vec before recursing.
+- `crates/librbs-core/src/env/mod.rs::from_loader`: receive the
+  per-source Vec from `insert_rbs_source` and write it into the
+  matching `Source::declarations` before moving sources into `env`.
 
-`Source::Ruby` is **out of scope for this slice**: today's loader
-emits no Ruby sources (the only producer is M5's `add_source` path).
-Add the `materialize_ruby_source` stub and the dispatch (`match
-src.tag`), but mark the Ruby branch `unreachable!("M5: Ruby source
-materialization")` and document the gap in the M5 doc.
+`DeclRef` is the natural element type — entries already use it as
+their canonical decl reference, `lookup_decl(src, decl_ref)` resolves
+to the AST node, and `DeclRef: Copy` keeps the Vec cheap.
 
-### `ext/librbs/src/materialize/mod.rs` — entry construction extension
+Tests:
 
-Today (per M3h's design) the entry-construction walk in
-`materialize_all` does, for each source:
+- For a fixture, `source.declarations.len()` equals
+  `signature().declarations().iter().count()`.
+- Order matches AST pre-order (assert by reading back via
+  `lookup_decl` and comparing names).
+- Every `DeclRef` resolves via `lookup_decl`.
 
-1. Walk top-level decls in pre-order.
-2. Materialize each decl into a Ruby `Value`.
-3. Look up / create the `*Entry` and `entry << [context, decl_value]`.
+Ruby surface: unchanged. Completely additive.
 
-Extend step 2/3 so the same `decl_value` is **also** appended to a
-per-source `RArray` that becomes `Source::RBS#declarations`.
-Concretely:
+#### PR R2: Rust `Directive` types + `Source::directives`
 
-```rust
-for (src_idx, src) in env.sources.iter().enumerate() {
-    ctx.switch_source(src_idx as u32);
-    let directives_ary = build_directives(&mut ctx, src)?;
-    let decls_ary = ruby.ary_new();
-    for top_decl_node in src.parser.signature().declarations().iter() {
-        let decl_value = materialize_declaration(&mut ctx, top_decl_node, /* ctx-stack */ &[])?;
-        decls_ary.push(decl_value)?;            // for Source#declarations
-        push_into_entry(env_ruby, &decl_value)?; // for *_decls (existing M3h logic)
-    }
-    let source_value = build_source(&mut ctx, src, directives_ary, decls_ary)?;
-    sources_ary.push(source_value)?;
-}
-ivar_set(env_ruby, "@sources", sources_ary)?;
-```
+Mirror upstream's directive AST in owned Rust form, and switch the
+resolver off raw-AST walking onto this owned representation.
 
-Nested decls (members of a Class / Module) are **not** added to
-`source.declarations` — upstream only stores top-level decls there;
-nested decls are reachable via `Class#each_decl`. The recursion that
-M3h does for nested entry construction is unchanged.
+Files:
 
-### `ext/librbs/src/lib.rs::materialize_all`
+- `crates/librbs-core/src/directive.rs` (new) or appended to
+  `source.rs`:
 
-Add `@sources` to the list of ivars set inside the
-re-entrancy-guarded body. The flag (`@__librbs_materialized`) and the
-two-phase ordering (build everything first, then publish) are
-unchanged from M3h.
+  ```rust
+  pub enum Directive {
+      Use(UseDirective),
+      ResolveTypeNames(ResolveTypeNamesDirective),
+  }
 
-### `lib/librbs/patches/environment.rb`
+  pub struct UseDirective {
+      pub clauses: Vec<UseClause>,
+      pub location: AstLocation,
+  }
 
-Extend the accessor patch list so any source-derived API also
-triggers materialization:
+  pub enum UseClause {
+      Single {
+          type_name: TypeNameSym,
+          new_name: Option<Sym>,
+          location: AstLocation,
+      },
+      Wildcard {
+          namespace: NamespaceSym,
+          location: AstLocation,
+      },
+  }
 
-```ruby
-%i[class_decls interface_decls type_alias_decls
-   constant_decls class_alias_decls global_decls
-   sources declarations].each do |m|
-  define_method(m) do
-    ensure_materialized
-    super()
+  pub struct ResolveTypeNamesDirective {
+      pub value: bool,
+      pub location: AstLocation,
+  }
+  ```
+
+  `AstLocation` carries a position pair (`start: u32, end: u32`),
+  matching what the AST nodes expose. All names are interned through
+  the existing `TypeNameInterner` / `Sym` infrastructure — directives
+  carry no borrowed AST data, so `Source::directives` can be moved
+  freely.
+
+- `crates/librbs-core/src/source.rs`: add
+  `pub directives: Vec<Directive>` to `Source`.
+
+- `crates/librbs-core/src/env/insert.rs::insert_rbs_source`: also
+  walk `signature().directives()` and return the populated
+  `Vec<Directive>` alongside top-level decls
+  (`Result<(Vec<DeclRef>, Vec<Directive>)>` or a small struct).
+  `Use` clause `type_name`s are already absolute by C-parser
+  invariant, so interning is a direct lookup.
+
+- `crates/librbs-core/src/env/mod.rs::from_loader`: write
+  `source.directives` similarly to R1.
+
+- `crates/librbs-core/src/resolver/driver.rs::apply_use_directive`:
+  consume from `&source.directives` instead of walking the AST.
+  Behaviour must be byte-for-byte identical (verified by existing
+  resolver tests).
+
+Tests:
+
+- Per-fixture: directive count, variant, and contents match
+  expectations (a single `Use` with mixed clauses,
+  `ResolveTypeNames` with both `true` and `false`).
+- Resolver tests stay green (no behaviour change).
+
+Ruby surface: unchanged. The Ruby materialiser does not yet consult
+`Source::directives`; that wiring lands in PR Y1.
+
+### Phase 2: Ruby cutover
+
+#### PR Y1: Directives materialiser
+
+Files:
+
+- `ext/librbs/src/materialize/directive.rs` (new): build
+  `RBS::AST::Directives::Use` / `Use::SingleClause` /
+  `Use::WildcardClause` / `RBS::AST::Directives::ResolveTypeNames`
+  from Rust `Directive` values. Locations go through the existing
+  `make_location` helper.
+- Extract a shared `materialize_namespace` helper from
+  `ext/librbs/src/materialize/type_name.rs` for use by
+  `WildcardClause`.
+
+Tests (`spec/unit/materialize_directives_spec.rb`):
+
+- Fixture with `# use Foo::Bar` and `# use Foo::*` produces the
+  right `Use` directive with `SingleClause` / `WildcardClause`
+  instances.
+- Fixture with `# resolve-type-names: false` produces a
+  `ResolveTypeNames` directive with `value: false`.
+
+No wiring yet — `directive.rs` has no callers from materialisation
+proper. Completely additive on the Ruby side.
+
+#### PR Y2: `add_source`-based materialisation (cutover)
+
+Replace M3h's direct `*_decls` ivar writes with per-source
+`Source::RBS` construction + an `add_source` call per source.
+Upstream's `add_source` then populates `@sources`, `@class_decls`,
+…, with full identity invariant.
+
+Files:
+
+- `ext/librbs/src/materialize/source.rs` (new): for each `src in
+  env.sources`:
+  1. Materialise the buffer (existing
+     `MaterializeCtx::buffer()` cache).
+  2. Materialise directives from `&src.directives` (R2) via PR Y1's
+     `materialize/directive.rs` → `Array[RBS::AST::Directives::*]`.
+  3. Iterate `&src.declarations` (R1) and recursively materialise
+     each top-level decl via the existing per-AST-node materialisers
+     (`materialize_class_node`, `materialize_module_node`, …),
+     producing `Array[RBS::AST::Declarations::*]`. Recursion into
+     nested members reuses the same per-AST-node code path that M3h
+     already exercises.
+  4. Build `RBS::Source::RBS.new(buffer, directives, declarations)`.
+
+- `ext/librbs/src/lib.rs::materialize_all`: replace the existing
+  body with:
+
+  1. Set `@__librbs_materialized = true` (or a `@__librbs_materializing`
+     guard) **before** the loop, so any accessor re-entered from
+     inside upstream's `add_source` short-circuits.
+  2. For each Rust source, build the `Source::RBS` value (above) and
+     call `env_ruby.funcall("add_source", (source_value,))?`.
+  3. Upstream's `add_source` writes `@sources` and the six
+     `*_decls` ivars. No Rust-side `*_decls` writes remain.
+
+- `lib/librbs/patches/environment.rb`: extend the accessor patch
+  list:
+
+  ```ruby
+  %i[class_decls interface_decls type_alias_decls
+     constant_decls class_alias_decls global_decls
+     sources declarations].each do |m|
+    define_method(m) do
+      ensure_materialized
+      super()
+    end
   end
-end
 
-%i[each_rbs_source each_ruby_source].each do |m|
-  define_method(m) do |&block|
-    ensure_materialized
-    super(&block)
+  %i[each_rbs_source each_ruby_source].each do |m|
+    define_method(m) do |&block|
+      ensure_materialized
+      super(&block)
+    end
   end
-end
-```
+  ```
 
-The `instance_variable_defined?(:@__librbs_handle)` guard from M3h
-already protects the pure-Ruby path; nothing else changes.
+- `Source::Ruby` is out of scope (loader emits no Ruby sources).
+  Stub the dispatch with `unreachable!("M5: Ruby source
+  materialisation")`.
+
+Re-entrancy:
+
+Upstream `add_source` reads / writes `@class_decls` etc. via direct
+ivar access in some paths and via `attr_reader` in others. The
+`@__librbs_materialized = true` flag must be set **before**
+`add_source` is invoked so that a patched accessor reached during
+that call short-circuits the materialisation guard. M3h's
+re-entrancy guard pattern (`@__librbs_materialized`) carries over
+unchanged.
+
+Performance note:
+
+Upstream's `add_source` walks each source's decls in Ruby and
+inserts into the `*_decls` Hashes. This replaces the work M3h did in
+Rust. For stdlib (~hundreds of sources, thousands of decls) the
+extra Ruby work is expected to be in the tens of ms — acceptable for
+M3. If benchmarks regress noticeably in M4, port the indexing back
+to Rust as a followup; the materialiser interface (Source::RBS
+values produced by Rust) remains stable either way.
+
+Tests:
+
+- `env.sources` returns `Array[RBS::Source::RBS]` with the right
+  count and order.
+- `env.declarations.size` matches a pure-RBS subprocess for the
+  curated fixture set.
+- Identity invariant at every nesting level:
+  `source.declarations[i].equal?(class_decls[name].decls[j].decl)`,
+  including nested decls reachable via `members`.
+- `each_rbs_source.to_a.size == env.sources.size`,
+  `each_ruby_source.to_a` is empty.
+- Directive parity (now wired end-to-end through `add_source`).
+- Re-entrancy: `materialize_all` twice is a no-op; `@sources`
+  retains object identity across repeated accessor calls.
+- M3i / M3j compat suite stays green — `*_decls` are now built by
+  upstream code so structural parity is by construction.
+
+Rollback story: reverting Y2 returns the codebase to M3h's state
+(`*_decls` populated directly, `@sources` empty). No regression of
+existing functionality.
+
+#### PR Y3: Retire M3h's entry-construction code
+
+Y2 leaves M3h's `build_entries` / `process_class_like` / `process_*`
+unreferenced in production, since `materialize_all` no longer calls
+them. Y3 deletes that code and tightens the remaining surface.
+
+Files:
+
+- `ext/librbs/src/materialize/decl.rs`: remove
+  `build_entries`, the `EntryHashes` struct, the `process_*`
+  functions, the `*Snapshot` structs, and the `materialize_*_decl`
+  wrappers that exist only to be called from `process_*`.
+- Keep the per-AST-node materialisers (`materialize_class_node`,
+  `materialize_module_node`, `materialize_interface_node`,
+  `materialize_type_alias_node`, …) — these are now invoked by
+  `materialize/source.rs` during recursion.
+- Remove `ClassRefs::entry_*` fields no longer referenced (the eight
+  `entry_*` Ruby class lookups in `MaterializeCtx::ClassRefs`).
+- Restructure `decl.rs` so its public API is "recursive AST → Value
+  walker invoked from `source.rs`".
+
+Tests: existing suite stays green.
+
+Ruby surface: unchanged from Y2.
 
 ### Resolved-env path
 
 `resolve_type_names` (M3d) returns a fresh `RBS::Environment` with a
-new `@__librbs_handle` and `@__librbs_materialized = false`. The first
-accessor on the resolved env runs `materialize_all` against the
-resolved Rust handle, producing **new** `Source::RBS` instances whose
-`declarations` carry resolved decl trees. This matches upstream's
-"new sources, new decls" behavior for the resolve path automatically;
-no extra code is needed here.
+new `@__librbs_handle` and `@__librbs_materialized = false`. The
+first accessor on the resolved env runs the new
+`add_source`-based `materialize_all` against the resolved Rust
+handle, producing `Source::RBS` instances whose `declarations` carry
+resolved decl trees. Identity invariant holds within the resolved
+env because upstream `add_source` is doing the indexing. No extra
+code is needed here.
 
 ### Buffer identity across envs (documented gap)
 
@@ -196,85 +414,84 @@ is `true`. librbs builds a fresh `RBS::Buffer` per env's
 `MaterializeCtx`, so this identity does **not** hold across envs.
 
 The same issue applies to `directives` — upstream reuses the same
-array reference; librbs materializes directives per env.
+array reference; librbs materialises directives per env.
 
 This slice does not fix the cross-env identity. The Buffer itself is
 value-equal (same `name`, same `content`), so any consumer that
 compares by content rather than `equal?` is unaffected. Track as a
 followup gated on a real consumer needing it (Steep doesn't today).
 
-### Tests
-
-`spec/unit/materialize_sources_spec.rb`:
-
-- After accessing any `*_decls`, `env.sources` is non-empty and each
-  element is an `RBS::Source::RBS` with a populated `directives` and
-  `declarations`.
-- `env.declarations.size` equals the sum of top-level decl counts
-  reported by walking `parser.signature().declarations()` for each
-  source (compute the expected count via a fresh pure-RBS subprocess
-  parse).
-- Identity invariant: for a fixture with a single class decl,
-  `env.sources.first.declarations.first.equal?(env.class_decls[name].decls.first.decl)`
-  is `true`.
-- `env.each_rbs_source.to_a.size == env.sources.size` and
-  `env.each_ruby_source.to_a` is empty (loader-only path).
-- Resolve identity: after `env.resolve_type_names`, the returned env
-  has its own `sources` array distinct from the original, but each
-  resolved source's `declarations` shares object identity with the
-  resolved env's `*_decls` entries (intra-env invariant preserved).
-
-`spec/unit/materialize_directives_spec.rb`:
-
-- Fixture with `# use Foo::Bar` and `# use Foo::*` produces the right
-  `Use` directive with `SingleClause` / `WildcardClause` instances.
-- Fixture with `# resolve-type-names: false` produces a
-  `ResolveTypeNames` directive with `value: false`.
-
-`spec/compat/source_parity_spec.rb` (curated subset — share fixtures
-with M3h's `object_spec.rb`):
-
-- For each fixture, run the librbs-patched env and a pure-RBS
-  subprocess; assert `env.declarations.map(&:to_json)` matches
-  byte-for-byte and `env.sources.size` matches.
-
 ## Out of scope (deferred)
 
-- `Source::Ruby` materialization → M5 (loader does not produce Ruby
+- `Source::Ruby` materialisation → M5 (loader does not produce Ruby
   sources today; the only producer is M5's `add_source` patch).
 - Cross-env Buffer / directive identity (`original.sources[i].buffer
   .equal?(resolved.sources[i].buffer)`) → followup, gated on a real
   consumer needing it.
-- `Source::RBS#each_type_name` performance — the upstream method walks
-  Ruby decls, which now means walking materialized objects. Acceptable
-  for M3; if it becomes hot in M4 benchmarks, port to Rust.
+- `Source::RBS#each_type_name` performance — the upstream method
+  walks Ruby decls, which now means walking materialised objects.
+  Acceptable for M3; if it becomes hot in M4 benchmarks, port to
+  Rust.
+- Rust-side `*_decls` indexing — Y2 lets upstream's `add_source` do
+  this work in Ruby. If M4 benchmarks show regression, porting the
+  indexing back into Rust is a followup; Y2's interface (Rust
+  produces `Source::RBS`, Ruby calls `add_source`) is stable either
+  way.
 
 ## Acceptance
 
+Rust foundation:
+
+- [ ] `Source::declarations: Vec<DeclRef>` populated by `from_loader`;
+      length and pre-order match the AST top-level decls.
+- [ ] `Source::directives: Vec<Directive>` populated by
+      `insert_rbs_source`; resolver consumes from this field.
+
+Ruby cutover:
+
+- [ ] `materialize_all` issues one `env.add_source(Source::RBS.new(…))`
+      per Rust source; no direct `*_decls` ivar writes from Rust.
 - [ ] `env.sources` returns a populated `Array[RBS::Source::RBS]`
-      after the first `*_decls` (or any sources-derived) access.
+      after the first source-derived (or `*_decls`) accessor call.
 - [ ] `env.declarations.size` and shape matches a pure-RBS subprocess
       for the curated fixture set.
-- [ ] Object-identity invariant holds within one env:
-      `source.declarations[i].equal?(class_decls[name].decls[j].decl)`.
+- [ ] Object-identity invariant holds within one env at every nesting
+      level: `source.declarations[i].equal?(class_decls[name].decls[j].decl)`
+      and the analogous assertion for nested decls reachable via
+      `members`.
 - [ ] `each_rbs_source` / `each_ruby_source` patches trigger
-      materialization and yield the correct sources.
-- [ ] Directive materializer covers `Use` (both clause kinds) and
+      materialisation and yield the correct sources.
+- [ ] Directive materialiser covers `Use` (both clause kinds) and
       `ResolveTypeNames`; round-trip tests pass.
-- [ ] Re-entrancy: `materialize_all` twice still a no-op; sources
-      array identity preserved across repeated accessor calls.
+- [ ] Re-entrancy: `materialize_all` twice still a no-op; `@sources`
+      retains object identity across repeated accessor calls;
+      accessors re-entered from inside `add_source` do not recurse
+      into materialisation.
 - [ ] Pure-Ruby `RBS::Environment.new` path remains untouched (no
       `@__librbs_handle` → accessors fall through to `super()`).
-- [ ] CI green.
+- [ ] After Y3: M3h's `build_entries` / `process_*` / per-entry
+      `materialize_*_decl` wrappers are removed; only the per-AST-node
+      materialisers remain in `ext/librbs/src/materialize/decl.rs`.
+- [ ] CI green at every PR boundary (R1, R2, Y1, Y2, Y3).
 
 ## References
 
 - `vendor/rbs/lib/rbs/source.rb` (Source::RBS / Source::Ruby shape)
 - `vendor/rbs/lib/rbs/ast/directives.rb` (Use / ResolveTypeNames)
 - `vendor/rbs/lib/rbs/environment.rb:14-16` (`#declarations` definition)
-- `vendor/rbs/lib/rbs/environment.rb:455-468` (`add_source` identity contract)
-- `vendor/rbs/lib/rbs/environment.rb:522-560` (`resolve_type_names` source-rebuild)
+- `vendor/rbs/lib/rbs/environment.rb:455-468` (`add_source` identity
+  contract — the upstream code path Y2 delegates to)
+- `vendor/rbs/lib/rbs/environment.rb:522-560` (`resolve_type_names`
+  source-rebuild — same `add_source` pattern Y2 uses)
 - `ext/librbs/src/materialize/mod.rs` (MaterializeCtx, buffer cache)
-- `crates/librbs-core/src/source.rs` (Rust Source / Buffer)
+- `ext/librbs/src/materialize/decl.rs` (current entry-driven walker;
+  Y3 retires `build_entries` and `process_*`, keeps per-AST-node
+  materialisers)
+- `crates/librbs-core/src/source.rs` (Rust Source / Buffer; R1 / R2
+  edit target)
+- `crates/librbs-core/src/env/insert.rs::insert_rbs_source` (R1 / R2
+  edit target — top-level decl + directive collection)
+- `crates/librbs-core/src/env/mod.rs::from_loader` (R1 / R2 edit
+  target — wires per-source Vecs into `Source`)
 - `crates/librbs-core/src/resolver/driver.rs::apply_use_directive`
-  (the directive walk we mirror on the materialization side)
+  (R2 edit target — switch from AST walk to `Source::directives`)
