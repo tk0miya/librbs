@@ -34,10 +34,12 @@ impl Table {
     /// decls). Mirrors the upstream behavior of seeding the table from the
     /// environment before any UseMaps are constructed.
     pub fn populate_from(&mut self, env: &Environment) {
-        self.known_types.extend(env.class_decls.keys().copied());
-        self.known_types.extend(env.interface_decls.iter().copied());
-        self.known_types
-            .extend(env.type_alias_decls.iter().copied());
+        self.known_types.extend(
+            env.decls
+                .iter()
+                .filter(|(_, e)| e.is_resolvable())
+                .map(|(&n, _)| n),
+        );
     }
 
     /// Compute the namespace → child-types reverse index. Must be called

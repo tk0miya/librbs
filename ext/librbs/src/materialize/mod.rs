@@ -12,7 +12,7 @@ use magnus::{Error, RClass, Ruby, Value, kwargs, prelude::*, value::ReprValue};
 
 use librbs_core::Environment;
 use librbs_core::Source;
-use librbs_core::env::entry::DeclRef;
+use librbs_core::env::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
 use librbs_core::interner::FrozenInterner;
 

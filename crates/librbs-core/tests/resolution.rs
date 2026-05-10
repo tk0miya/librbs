@@ -15,10 +15,9 @@
 use std::path::PathBuf;
 
 use librbs_core::SourceTag;
-use librbs_core::env::Environment;
-use librbs_core::env::entry::DeclRef;
 use librbs_core::env::insert::insert_rbs_source;
 use librbs_core::env::resolution::ResolvedRef;
+use librbs_core::env::{DeclRef, Environment};
 use librbs_core::resolver::driver::resolve;
 use librbs_core::source::Source;
 
@@ -57,7 +56,7 @@ class Bar < Foo end
         .expect("Bar's super-class reference should be in the resolution");
     assert_eq!(slice.len(), 1);
     let foo_sym = env
-        .class_decls
+        .decls
         .keys()
         .find(|k| env.interner.to_string(**k) == "::Foo")
         .copied()
@@ -113,7 +112,7 @@ class Bar < Base end
 "#]);
 
     let bar_sym = env
-        .class_decls
+        .decls
         .keys()
         .find(|k| env.interner.to_string(**k) == "::Bar")
         .copied()
@@ -124,7 +123,7 @@ class Bar < Base end
     let resolution = resolve(&mut env, Some(&only));
 
     let base_sym = env
-        .class_decls
+        .decls
         .keys()
         .find(|k| env.interner.to_string(**k) == "::Base")
         .copied()

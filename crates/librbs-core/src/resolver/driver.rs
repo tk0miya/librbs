@@ -35,11 +35,10 @@ use ruby_rbs::node::{
     UseWildcardClauseNode,
 };
 
-use crate::env::Environment;
-use crate::env::entry::{Context, DeclRef};
 use crate::env::insert::{find_type_name_node, intern_type_name_node, is_decl_node};
 use crate::env::resolution::{Resolution, ResolvedRef};
 use crate::env::use_map::{Table, UseMap};
+use crate::env::{Context, DeclRef, Environment};
 use crate::interner::{FrozenInterner, Sym, TypeNameInterner, TypeNameSym};
 use crate::resolver::TypeNameResolver;
 use crate::source::Source;
