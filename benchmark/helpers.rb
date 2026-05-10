@@ -49,15 +49,27 @@ module BenchHelpers
 
   module_function
 
+  # Returns an env hash safe to pass to Open3 from inside `bundle exec`.
+  # Bundler.unbundled_env strips bundler keys from a copy of ENV, but
+  # Open3.capture3(env, ...) only overrides keys present in `env` — keys
+  # absent from the hash are inherited from the parent process, so
+  # BUNDLE_GEMFILE / RUBYOPT etc. leak through and the child sees the
+  # parent's restricted Gemfile gem set instead of the full local gem
+  # environment. Explicitly setting those keys to nil tells Open3 to
+  # remove them in the child.
   def unbundled_env
-    if defined?(Bundler)
-      Bundler.unbundled_env
-    else
-      ENV.to_h.tap do |h|
-        h.delete_if { |k, _| k.start_with?("BUNDLE_") }
-        h.delete("RUBYOPT")
+    base =
+      if defined?(Bundler)
+        Bundler.unbundled_env
+      else
+        ENV.to_h
       end
+    base = base.dup
+    ENV.each_key do |k|
+      next if base.key?(k)
+      base[k] = nil
     end
+    base
   end
 
   def loader_setup(size)

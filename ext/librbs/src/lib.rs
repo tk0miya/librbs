@@ -94,6 +94,13 @@ fn read_dirs(loader: Value) -> Result<Vec<PathBuf>, Error> {
 
 /// Read `@libs` (Set<Library>) from the Ruby loader. Each `Library` is a
 /// `Struct.new(:name, :version, keyword_init: true)`.
+///
+/// Libraries sourced from installed gems (e.g. `webrick`, `prism` when
+/// pulled in via an `rbs_collection.lock.yaml` with `type: rubygems`) live
+/// under `Gem::Specification.find_by_name(name).gem_dir + "/sig"`, which
+/// our Rust `Repository` does not know how to find. Mirror upstream's
+/// `EnvironmentLoader.gem_sig_path` here so gem-installed sigs resolve
+/// before the Rust loader's repository fallback runs.
 fn read_libs(loader: Value) -> Result<Vec<(String, Option<String>)>, Error> {
     let v = ivar_get(loader, "@libs")?;
     if v.is_nil() {
@@ -112,6 +119,30 @@ fn read_libs(loader: Value) -> Result<Vec<(String, Option<String>)>, Error> {
         out.push((name, version));
     }
     Ok(out)
+}
+
+/// Resolve a `(name, version)` library to its installed gem's `sig/`
+/// directory by calling upstream's `RBS::EnvironmentLoader.gem_sig_path`.
+/// Returns `None` if the library is not provided by an installed gem.
+fn gem_sig_path(name: &str, version: Option<&str>) -> Result<Option<PathBuf>, Error> {
+    let ruby = Ruby::get().expect("Ruby thread");
+    let cls: Value = ruby.eval("RBS::EnvironmentLoader")?;
+    let v_arg: Value = match version {
+        Some(s) => s.into_value_with(&ruby),
+        None => ruby.qnil().as_value(),
+    };
+    let result: Value = cls.funcall("gem_sig_path", (name, v_arg))?;
+    if result.is_nil() {
+        return Ok(None);
+    }
+    // Returns `[Gem::Specification, Pathname]`. We want the path.
+    let arr = RArray::try_convert(result)?;
+    if arr.len() < 2 {
+        return Ok(None);
+    }
+    let path_v: Value = arr.entry(1)?;
+    let s: String = path_v.funcall("to_s", ())?;
+    Ok(Some(PathBuf::from(s)))
 }
 
 /// Read `@repository.dirs` from the Ruby loader.
@@ -362,7 +393,10 @@ fn build_environment(loader: Value) -> Result<Value, Error> {
         rust_loader.add_repository_dir(dir);
     }
     for (name, version) in libs {
-        rust_loader.add_library(name, version);
+        match gem_sig_path(&name, version.as_deref())? {
+            Some(path) => rust_loader.add_library_with_path(name, version, path),
+            None => rust_loader.add_library(name, version),
+        }
     }
 
     let env = librbs_core::Environment::from_loader(&mut rust_loader).map_err(rb_runtime_err)?;
