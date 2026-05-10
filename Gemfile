@@ -11,3 +11,5 @@ group :development do
   gem "rake-compiler"
   gem "rspec", "~> 3.0"
 end
+
+gem "stackprof", "~> 0.2.28", group: :development
