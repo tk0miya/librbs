@@ -124,9 +124,15 @@ fn bases_only(
     class: magnus::RClass,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    Ok(class
-        .new_instance((kwargs!("location" => loc),))?
-        .as_value())
+    // Skip `Class.new(location:)` keyword dispatch: every `Bases::*`
+    // subclass except `Any` has a vanilla `initialize(location:)` that
+    // does nothing but `@location = location`, so allocating the
+    // instance directly and writing the ivar is byte-equivalent and
+    // sidesteps the `kwargs!` Hash + keyword unpack overhead.
+    let obj = magnus::RObject::from_value(class.obj_alloc()?)
+        .expect("Bases::* allocate yields an Object instance");
+    obj.ivar_set("@location", loc)?;
+    Ok(obj.as_value())
 }
 
 fn any_type(ctx: &mut MaterializeCtx<'_>, node: &AnyTypeNode<'_>) -> Result<Value, Error> {
