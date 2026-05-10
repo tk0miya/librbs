@@ -141,7 +141,7 @@ pub fn build_annotations(
     ctx: &mut MaterializeCtx<'_>,
     list: ruby_rbs::node::NodeList<'_>,
 ) -> Result<RArray, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(list.len());
     for n in list.iter() {
         let Node::Annotation(a) = &n else {
             unreachable!("annotations list must hold Annotation nodes only");
@@ -250,7 +250,7 @@ fn build_args_array(
     ctx: &mut MaterializeCtx<'_>,
     args: ruby_rbs::node::NodeList<'_>,
 ) -> Result<RArray, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(args.len());
     for a in args.iter() {
         arr.push(materialize_type(ctx, &a)?)?;
     }
@@ -279,8 +279,9 @@ fn method_definition(
     let kind = method_definition_kind(ctx, node.kind());
     let visibility = method_definition_visibility(ctx, node.visibility());
 
-    let overloads = ctx.ruby.ary_new();
-    for ov in node.overloads().iter() {
+    let overloads_list = node.overloads();
+    let overloads = ctx.ruby.ary_new_capa(overloads_list.len());
+    for ov in overloads_list.iter() {
         let Node::MethodDefinitionOverload(o) = &ov else {
             unreachable!("MethodDefinition.overloads holds Overload nodes only");
         };

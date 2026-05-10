@@ -108,6 +108,19 @@ impl<'a> NodeList<'a> {
             marker: PhantomData,
         }
     }
+
+    /// O(1) length, read straight from the underlying `rbs_node_list_t.length`
+    /// field. Used by the materialiser to pre-size `RArray` capacity so each
+    /// `RArray::push` does not retrigger Ruby's geometric realloc.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        unsafe { (*self.pointer).length }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub struct NodeListIter<'a> {
@@ -155,6 +168,17 @@ impl<'a> RBSHash<'a> {
             current: unsafe { (*self.pointer).head },
             marker: PhantomData,
         }
+    }
+
+    /// O(1) length, read straight from the underlying `rbs_hash.length` field.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        unsafe { (*self.pointer).length }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

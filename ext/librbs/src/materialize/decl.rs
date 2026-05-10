@@ -46,7 +46,7 @@ pub fn materialize_declarations(
     ctx: &mut MaterializeCtx<'_>,
     declarations: NodeList<'_>,
 ) -> Result<Value, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(declarations.len());
     let root_ns = ctx.interner.namespaces().root_absolute();
     let mut counter: u32 = 0;
     for decl in declarations.iter() {
@@ -152,8 +152,9 @@ fn materialize_class_node(
         None => ctx.ruby.qnil().as_value(),
     };
 
-    let members = ctx.ruby.ary_new();
-    for member in node.members().iter() {
+    let members_list = node.members();
+    let members = ctx.ruby.ary_new_capa(members_list.len());
+    for member in members_list.iter() {
         if is_decl_node(&member) {
             let nested = materialize_nested_decl(ctx, &member, my_namespace, counter)?;
             members.push(nested)?;
@@ -202,16 +203,18 @@ fn materialize_module_node(
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
 
-    let self_types = ctx.ruby.ary_new();
-    for st in node.self_types().iter() {
+    let self_types_list = node.self_types();
+    let self_types = ctx.ruby.ary_new_capa(self_types_list.len());
+    for st in self_types_list.iter() {
         let Node::ModuleSelf(ms) = &st else {
             unreachable!("module self_types holds ModuleSelf nodes only");
         };
         self_types.push(module_self(ctx, ms)?)?;
     }
 
-    let members = ctx.ruby.ary_new();
-    for member in node.members().iter() {
+    let members_list = node.members();
+    let members = ctx.ruby.ary_new_capa(members_list.len());
+    for member in members_list.iter() {
         if is_decl_node(&member) {
             let nested = materialize_nested_decl(ctx, &member, my_namespace, counter)?;
             members.push(nested)?;
@@ -256,8 +259,9 @@ fn materialize_interface_node(
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
 
-    let members = ctx.ruby.ary_new();
-    for m in node.members().iter() {
+    let members_list = node.members();
+    let members = ctx.ruby.ary_new_capa(members_list.len());
+    for m in members_list.iter() {
         members.push(materialize_member(ctx, &m)?)?;
     }
 
@@ -552,8 +556,9 @@ fn class_super(ctx: &mut MaterializeCtx<'_>, sc: &ClassSuperNode<'_>) -> Result<
     let raw = find_type_name_node(ctx.interner, &sc.name())
         .expect("super class name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
-    let args = ctx.ruby.ary_new();
-    for a in sc.args().iter() {
+    let args_list = sc.args();
+    let args = ctx.ruby.ary_new_capa(args_list.len());
+    for a in args_list.iter() {
         args.push(materialize_type(ctx, &a)?)?;
     }
     Ok(ctx
@@ -575,8 +580,9 @@ fn module_self(ctx: &mut MaterializeCtx<'_>, ms: &ModuleSelfNode<'_>) -> Result<
     let raw = find_type_name_node(ctx.interner, &ms.name())
         .expect("module self-type name pre-interned by insert");
     let name = materialize_resolved_type_name(ctx, raw)?;
-    let args = ctx.ruby.ary_new();
-    for a in ms.args().iter() {
+    let args_list = ms.args();
+    let args = ctx.ruby.ary_new_capa(args_list.len());
+    for a in args_list.iter() {
         args.push(materialize_type(ctx, &a)?)?;
     }
     Ok(ctx

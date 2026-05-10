@@ -32,7 +32,7 @@ pub fn materialize_namespace(
 ) -> Result<Value, Error> {
     let interner = ctx.interner;
     let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
-    let path_array = ctx.ruby.ary_new();
+    let path_array = ctx.ruby.ary_new_capa(path_syms.len());
     for s in path_syms {
         let seg = interner.symbols().lookup(*s);
         path_array.push(ctx.ruby.to_symbol(seg))?;

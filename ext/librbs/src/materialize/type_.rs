@@ -201,7 +201,7 @@ fn build_args_array(
     ctx: &mut MaterializeCtx<'_>,
     args: ruby_rbs::node::NodeList<'_>,
 ) -> Result<RArray, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(args.len());
     for a in args.iter() {
         arr.push(materialize_type(ctx, &a)?)?;
     }
@@ -288,7 +288,7 @@ fn types_array(
     ctx: &mut MaterializeCtx<'_>,
     types: ruby_rbs::node::NodeList<'_>,
 ) -> Result<RArray, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(types.len());
     for t in types.iter() {
         arr.push(materialize_type(ctx, &t)?)?;
     }
@@ -330,8 +330,9 @@ fn intersection_type(
 
 fn record_type(ctx: &mut MaterializeCtx<'_>, node: &RecordTypeNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    let all_fields = ctx.ruby.hash_new();
-    for (key, value) in node.all_fields().iter() {
+    let fields_hash = node.all_fields();
+    let all_fields = ctx.ruby.hash_new_capa(fields_hash.len());
+    for (key, value) in fields_hash.iter() {
         let key_sym = match &key {
             Node::Symbol(s) => ctx.ruby.to_symbol(s.as_str()),
             // RecordType key shapes are always Symbol per the C parser
@@ -342,7 +343,7 @@ fn record_type(ctx: &mut MaterializeCtx<'_>, node: &RecordTypeNode<'_>) -> Resul
             unreachable!("RBS::Types::Record value must be RecordFieldType");
         };
         let ty = materialize_type(ctx, &field.type_())?;
-        let pair = ctx.ruby.ary_new();
+        let pair = ctx.ruby.ary_new_capa(2);
         pair.push(ty)?;
         pair.push(field.required())?;
         all_fields.aset(key_sym, pair)?;
@@ -412,31 +413,36 @@ fn function_type(
     ctx: &mut MaterializeCtx<'_>,
     node: &FunctionTypeNode<'_>,
 ) -> Result<Value, Error> {
-    let required_positionals = ctx.ruby.ary_new();
-    for p in node.required_positionals().iter() {
+    let req_pos_list = node.required_positionals();
+    let required_positionals = ctx.ruby.ary_new_capa(req_pos_list.len());
+    for p in req_pos_list.iter() {
         required_positionals.push(function_param(ctx, &p)?)?;
     }
-    let optional_positionals = ctx.ruby.ary_new();
-    for p in node.optional_positionals().iter() {
+    let opt_pos_list = node.optional_positionals();
+    let optional_positionals = ctx.ruby.ary_new_capa(opt_pos_list.len());
+    for p in opt_pos_list.iter() {
         optional_positionals.push(function_param(ctx, &p)?)?;
     }
     let rest_positionals: Value = match node.rest_positionals() {
         Some(p) => function_param(ctx, &p)?,
         None => ctx.ruby.qnil().as_value(),
     };
-    let trailing_positionals = ctx.ruby.ary_new();
-    for p in node.trailing_positionals().iter() {
+    let trail_pos_list = node.trailing_positionals();
+    let trailing_positionals = ctx.ruby.ary_new_capa(trail_pos_list.len());
+    for p in trail_pos_list.iter() {
         trailing_positionals.push(function_param(ctx, &p)?)?;
     }
-    let required_keywords = ctx.ruby.hash_new();
-    for (key, value) in node.required_keywords().iter() {
+    let req_kw_hash = node.required_keywords();
+    let required_keywords = ctx.ruby.hash_new_capa(req_kw_hash.len());
+    for (key, value) in req_kw_hash.iter() {
         let Node::Symbol(s) = &key else {
             unreachable!("required_keywords key must be Symbol");
         };
         required_keywords.aset(ctx.ruby.to_symbol(s.as_str()), function_param(ctx, &value)?)?;
     }
-    let optional_keywords = ctx.ruby.hash_new();
-    for (key, value) in node.optional_keywords().iter() {
+    let opt_kw_hash = node.optional_keywords();
+    let optional_keywords = ctx.ruby.hash_new_capa(opt_kw_hash.len());
+    for (key, value) in opt_kw_hash.iter() {
         let Node::Symbol(s) = &key else {
             unreachable!("optional_keywords key must be Symbol");
         };

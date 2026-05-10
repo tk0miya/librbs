@@ -40,7 +40,7 @@ pub fn materialize_directives(
     directives: NodeList<'_>,
     content: &str,
 ) -> Result<Value, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(directives.len() + 1);
     if let Some(magic) = materialize_magic_comment(ctx, content)? {
         arr.push(magic)?;
     }
@@ -56,8 +56,9 @@ fn materialize_use(ctx: &mut MaterializeCtx<'_>, u: &UseNode<'_>) -> Result<Valu
     let loc = make_location(ctx, &u.location())?;
     add_required_child(ctx, loc, "keyword", &u.keyword_location())?;
 
-    let clauses = ctx.ruby.ary_new();
-    for clause in u.clauses().iter() {
+    let clauses_list = u.clauses();
+    let clauses = ctx.ruby.ary_new_capa(clauses_list.len());
+    for clause in clauses_list.iter() {
         match clause {
             Node::UseSingleClause(c) => clauses.push(materialize_use_single_clause(ctx, &c)?)?,
             Node::UseWildcardClause(c) => {
@@ -152,9 +153,10 @@ fn build_namespace_from_node(
     // Try the interner-cached path first to share `RBS::Namespace`
     // identity with the rest of materialisation when the namespace was
     // already interned. Falls through to a direct build otherwise.
-    let mut path: Vec<librbs_core::interner::Sym> = Vec::new();
+    let path_list = ns_node.path();
+    let mut path: Vec<librbs_core::interner::Sym> = Vec::with_capacity(path_list.len());
     let mut interned_ok = true;
-    for seg in ns_node.path().iter() {
+    for seg in path_list.iter() {
         if let Node::Symbol(sym) = seg {
             match ctx.interner.symbols().intern(sym.as_str()) {
                 Some(s) => path.push(s),
@@ -170,8 +172,8 @@ fn build_namespace_from_node(
     }
 
     // Fallback: build the path array straight from the AST node.
-    let path_array = ctx.ruby.ary_new();
-    for seg in ns_node.path().iter() {
+    let path_array = ctx.ruby.ary_new_capa(path_list.len());
+    for seg in path_list.iter() {
         if let Node::Symbol(sym) = seg {
             path_array.push(ctx.ruby.to_symbol(sym.as_str()))?;
         }
