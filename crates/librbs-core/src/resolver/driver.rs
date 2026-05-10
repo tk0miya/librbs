@@ -144,9 +144,9 @@ fn resolve_source(
         {
             // Run the same recursion `walk_declaration` would have, but
             // only perform its counter side effect — keeping
-            // `decl_counter` aligned with insert's `DeclRef::decl_index`
-            // numbering even across skips, so M3e materialization can
-            // look entries up by `DeclRef` without an off-by-N gap from
+            // `decl_counter` aligned with the materializer's pre-order
+            // even across skips, so M3e materialization can look
+            // resolutions up by `DeclRef` without an off-by-N gap from
             // `only:` filtering.
             consume_decl_ref(&decl, &mut ctx.decl_counter);
             continue;
@@ -157,11 +157,11 @@ fn resolve_source(
 
 /// Walk `node` as `walk_declaration` would, performing only its
 /// counter side effect — one `decl_counter += 1` per
-/// `is_decl_node` visit, in the same pre-order as
-/// `env::insert::insert_decl`. The match arms intentionally mirror
-/// `walk_class` / `walk_module`'s nested-decl recursion (gated by
-/// `is_decl_node`) so that any future change to which AST shapes
-/// contain nested decls is applied in both places.
+/// `is_decl_node` visit, in the same pre-order the materializer uses.
+/// The match arms intentionally mirror `walk_class` / `walk_module`'s
+/// nested-decl recursion (gated by `is_decl_node`) so that any future
+/// change to which AST shapes contain nested decls is applied in both
+/// places.
 ///
 /// Direct counter increment is equivalent to
 /// `WalkCtx::next_decl_ref` because the latter's only side effect
@@ -189,8 +189,8 @@ fn consume_decl_ref(node: &Node<'_>, counter: &mut u32) {
             }
         }
         // Interface / TypeAlias / Constant / Global / ClassAlias /
-        // ModuleAlias have no nested decls — `insert_decl` issues a
-        // single DeclRef and returns.
+        // ModuleAlias have no nested decls — they consume a single
+        // counter step and return.
         _ => {}
     }
 }
@@ -199,8 +199,7 @@ fn consume_decl_ref(node: &Node<'_>, counter: &mut u32) {
 /// under, then test it against the `only:` filter. Anchor against the
 /// absolute root (mirrors `prefix: Namespace.root` in
 /// `RBS::Environment#resolve_signature`, environment.rb:515) so the
-/// comparison key matches exactly the entry-name M2 inserted into the
-/// `*_decls` tables.
+/// comparison key matches exactly the entry-name `env::insert` records.
 fn decl_matches_only(
     decl: &Node<'_>,
     only: &FxHashSet<TypeNameSym>,
@@ -774,111 +773,6 @@ fn walk_function_param(ctx: &mut WalkCtx<'_, '_>, p: &Node<'_>, context: &Contex
     }
 }
 
-// ----- DeclRef helpers (consumed by tests) -----
-
-/// Look up a declaration in a source by its [`DeclRef`]. Mirrors the
-/// pre-order indexing in `env::insert::insert_rbs_source` so that for
-/// every entry inserted there, the same `DeclRef` resolves back to the
-/// same node here. Used by the M2 follow-up "DeclRef indexing
-/// consistency between insert and lookup" round-trip test.
-pub fn lookup_decl<'a>(source: &'a Source, decl_ref: DeclRef) -> Option<Node<'a>> {
-    let target = decl_ref.decl_index;
-    let mut counter: u32 = 0;
-    for decl in source.parser.signature().declarations().iter() {
-        if let Some(found) = walk_decl_index(&decl, &mut counter, target) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn walk_decl_index<'a>(node: &Node<'a>, counter: &mut u32, target: u32) -> Option<Node<'a>> {
-    if !is_decl_node(node) {
-        return None;
-    }
-    let idx = *counter;
-    *counter += 1;
-    if idx == target {
-        return Some(clone_node(node));
-    }
-    match node {
-        Node::Class(c) => {
-            for member in c.members().iter() {
-                if is_decl_node(&member)
-                    && let Some(hit) = walk_decl_index(&member, counter, target)
-                {
-                    return Some(hit);
-                }
-            }
-        }
-        Node::Module(m) => {
-            for member in m.members().iter() {
-                if is_decl_node(&member)
-                    && let Some(hit) = walk_decl_index(&member, counter, target)
-                {
-                    return Some(hit);
-                }
-            }
-        }
-        _ => {}
-    }
-    None
-}
-
-/// Re-construct the same `Node<'a>` variant by destructuring and
-/// rebuilding through `Node::*` field accessors. This avoids relying on
-/// `Node: Clone` (the generated enum is not `Clone`).
-fn clone_node<'a>(node: &Node<'a>) -> Node<'a> {
-    // The bound fields inside `Node::*` are wrapper structs that hold a
-    // `*mut rbs_node_t` plus a parser pointer; calling `as_node` on each
-    // returns a fresh `Node` with the same inner pointers, which is the
-    // cheapest way to round-trip.
-    match node {
-        Node::Class(c) => c.clone_node(),
-        Node::Module(m) => m.clone_node(),
-        Node::Interface(i) => i.clone_node(),
-        Node::TypeAlias(t) => t.clone_node(),
-        Node::Constant(c) => c.clone_node(),
-        Node::Global(g) => g.clone_node(),
-        Node::ClassAlias(a) => a.clone_node(),
-        Node::ModuleAlias(a) => a.clone_node(),
-        _ => unreachable!("clone_node only used for declaration nodes"),
-    }
-}
-
-trait CloneNode<'a> {
-    fn clone_node(&self) -> Node<'a>;
-}
-
-macro_rules! impl_clone_via_as_node {
-    ($($t:ident),* $(,)?) => {
-        $(
-            impl<'a> CloneNode<'a> for ruby_rbs::node::$t<'a> {
-                fn clone_node(&self) -> Node<'a> {
-                    // The wrapper struct holds raw pointers plus a
-                    // `PhantomData`; bytewise duplication is sound. We
-                    // immediately consume the duplicate via `as_node`,
-                    // which never mutates the underlying parser data.
-                    let copy: ruby_rbs::node::$t<'a> =
-                        unsafe { std::ptr::read(self as *const ruby_rbs::node::$t<'a>) };
-                    copy.as_node()
-                }
-            }
-        )*
-    };
-}
-
-impl_clone_via_as_node!(
-    ClassNode,
-    ModuleNode,
-    InterfaceNode,
-    TypeAliasNode,
-    ConstantNode,
-    GlobalNode,
-    ClassAliasNode,
-    ModuleAliasNode,
-);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,11 +784,11 @@ mod tests {
 
     #[test]
     fn consume_decl_ref_advances_counter_per_pre_order_decl() {
-        // The driver's `decl_counter` must advance by the same amount
-        // `env::insert::insert_decl` would consume for the same
-        // declaration subtree, otherwise `only:` skipping desyncs the
-        // counter against insert's `DeclRef::decl_index` (M3e
-        // materialization will look entries up by that index).
+        // The driver's `decl_counter` must advance by exactly one per
+        // declaration subtree node, otherwise `only:` skipping desyncs
+        // it from the materializer's pre-order — which would make the
+        // materializer look up the wrong `Resolution` slice for each
+        // decl.
         //
         // Hand-counted expectations:
         // - leaf `class A end`                      → 1 (just A)
