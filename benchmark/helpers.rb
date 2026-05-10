@@ -37,7 +37,7 @@ module BenchHelpers
     },
     medium: {
       libraries: %w[
-        set pathname date time uri optparse logger stringio strscan
+        pathname date time uri optparse logger stringio strscan
       ]
     },
     large: {
@@ -48,6 +48,17 @@ module BenchHelpers
   IMPLS = %i[pure_rbs librbs].freeze
 
   module_function
+
+  def unbundled_env
+    if defined?(Bundler)
+      Bundler.unbundled_env
+    else
+      ENV.to_h.tap do |h|
+        h.delete_if { |k, _| k.start_with?("BUNDLE_") }
+        h.delete("RUBYOPT")
+      end
+    end
+  end
 
   def loader_setup(size)
     spec = SIZES.fetch(size)
@@ -60,9 +71,10 @@ module BenchHelpers
         require "yaml"
         _lock_path = Pathname(#{lock_abs.inspect})
         unless File.directory?(#{cache_dir.inspect})
-          abort "[bench] collection cache missing at #{cache_dir} — run: " \\
-                "cd benchmark/fixtures && bundle exec rbs collection install " \\
-                "--collection selenium.rbs_collection.yaml --frozen"
+          abort "[bench] collection cache missing at #{cache_dir} -- run: " \\
+                "cd benchmark/fixtures && bundle exec rbs " \\
+                "--collection selenium.rbs_collection.yaml " \\
+                "collection install --frozen"
         end
         _lockfile = RBS::Collection::Config::Lockfile.from_lockfile(
           lockfile_path: _lock_path,
@@ -96,12 +108,18 @@ module BenchHelpers
 
   # Runs `body` in a fresh `ruby -e` subprocess with the given impl loaded.
   # Returns the subprocess stdout as a string.
+  #
+  # Bundler env (BUNDLE_GEMFILE / RUBYOPT / GEM_PATH) is stripped so the
+  # child sees every locally installed gem, not just the parent's
+  # restricted Gemfile set. Without this, gems pulled in by the
+  # collection (e.g. webrick) fail to resolve under `bundle exec`.
   def run_subprocess(impl:, body:)
     code = +""
     code << requires_for(impl)
     code << "\n"
     code << body
-    out, err, status = Open3.capture3(RbConfig.ruby, "-e", code, chdir: ROOT)
+    env = unbundled_env
+    out, err, status = Open3.capture3(env, RbConfig.ruby, "-e", code, chdir: ROOT)
     unless status.success?
       raise <<~MSG
         bench subprocess failed (impl=#{impl})

@@ -19,10 +19,13 @@ vendored from [SeleniumHQ/selenium][sel] (33 gems pinned to a specific
 
 ```sh
 cd benchmark/fixtures
-bundle exec rbs collection install \
-  --collection selenium.rbs_collection.yaml --frozen
+bundle exec rbs --collection selenium.rbs_collection.yaml \
+  collection install --frozen
 cd -
 ```
+
+(`--collection` is an option of the top-level `rbs` command, not of
+`collection install`, so the flag has to come before the subcommand.)
 
 This clones gem_rbs_collection at the pinned SHA into
 `benchmark/fixtures/.gem_rbs_collection/` (gitignored). To swap in a
