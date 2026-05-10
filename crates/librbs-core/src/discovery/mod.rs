@@ -26,10 +26,10 @@ pub struct Library {
 
 #[derive(Debug, Default)]
 pub struct Loader {
-    pub core_root: Option<PathBuf>,
-    pub repository: Repository,
-    pub libs: Vec<Library>,
-    pub dirs: Vec<PathBuf>,
+    core_root: Option<PathBuf>,
+    repository: Repository,
+    libs: Vec<Library>,
+    dirs: Vec<PathBuf>,
 }
 
 impl Loader {
@@ -44,8 +44,16 @@ impl Loader {
         }
     }
 
+    pub fn set_core_root(&mut self, core_root: Option<PathBuf>) {
+        self.core_root = core_root;
+    }
+
     pub fn add_dir(&mut self, dir: impl Into<PathBuf>) {
         self.dirs.push(dir.into());
+    }
+
+    pub fn add_repository_dir(&mut self, dir: impl Into<PathBuf>) {
+        self.repository.add(dir);
     }
 
     pub fn add_library(&mut self, name: impl Into<String>, version: Option<String>) {

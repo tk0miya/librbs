@@ -56,14 +56,6 @@ impl TypeNameResolver {
         }
     }
 
-    pub fn all_names(&self) -> &FxHashSet<TypeNameSym> {
-        &self.all_names
-    }
-
-    pub fn aliases(&self) -> &FxHashMap<TypeNameSym, (TypeNameSym, Context)> {
-        &self.aliases
-    }
-
     fn has_type_name(&self, full: TypeNameSym) -> bool {
         self.all_names.contains(&full)
     }
