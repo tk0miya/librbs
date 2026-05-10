@@ -49,7 +49,7 @@ Why this is the right shape:
   `RBS::Environment` materialises by feeding `add_source` the same
   way; upstream's own `resolve_type_names` does exactly that.
 
-The cutover is split into two Rust foundation PRs (additive,
+The cutover is split into one Rust foundation PR (additive,
 Ruby-invisible) followed by three Ruby-side PRs.
 
 ## Prerequisites
@@ -112,58 +112,18 @@ indexing.
 
 The Rust `Environment` / `Source` (`crates/librbs-core/src/source.rs`,
 `env/mod.rs`) currently model only `*_decls` and the raw parsed AST.
-There is no Rust-side analogue to `Source::RBS#declarations` (the
-top-level decl list) or `Source::RBS#directives`. Today's
-materialiser walks `parser.signature().declarations()` ad-hoc to find
-top-level nodes, and the resolver walks
-`parser.signature().directives()` for `Use` clauses. Neither is
-exposed as first-class state.
-
-Mirroring those upstream fields in Rust is a prerequisite for the
-materialiser: the Ruby side iterates `Vec<DeclRef>` and
-`Vec<Directive>` from each `Source` to assemble each `Source::RBS`,
-not re-derive them from the AST every time.
+There is no Rust-side analogue to `Source::RBS#directives`: the
+resolver walks `parser.signature().directives()` for `Use` clauses
+ad-hoc. R2 introduces an owned `Vec<Directive>` so directives can be
+consumed by both the resolver and the Y1 directive materialiser
+without re-walking the AST.
 
 ## Implementation plan
 
-The slice lands as two Rust-side foundation PRs (R1, R2) followed by
+The slice lands as one Rust-side foundation PR (R2) followed by
 three Ruby-side PRs (Y1–Y3).
 
 ### Phase 1: Rust foundation
-
-#### PR R1: `Source::declarations`
-
-Mirror `RBS::Source::RBS#declarations` in Rust. A per-source list of
-top-level `DeclRef`s, populated during loader-time AST insertion.
-
-Files:
-
-- `crates/librbs-core/src/source.rs`: add
-  `pub declarations: Vec<DeclRef>` to `Source`. Initialize empty in
-  `Source::new`; the field is filled by `from_loader` after insert.
-- `crates/librbs-core/src/env/insert.rs::insert_rbs_source`: change
-  return type to `Result<Vec<DeclRef>>`. Inside the existing
-  `for decl in signature.declarations().iter()` loop, capture the
-  `DeclRef` that `assign_decl_index` will assign (= `{ source_index,
-  decl_index: counter }` at loop entry) and push into the returned
-  Vec before recursing.
-- `crates/librbs-core/src/env/mod.rs::from_loader`: receive the
-  per-source Vec from `insert_rbs_source` and write it into the
-  matching `Source::declarations` before moving sources into `env`.
-
-`DeclRef` is the natural element type — entries already use it as
-their canonical decl reference, `lookup_decl(src, decl_ref)` resolves
-to the AST node, and `DeclRef: Copy` keeps the Vec cheap.
-
-Tests:
-
-- For a fixture, `source.declarations.len()` equals
-  `signature().declarations().iter().count()`.
-- Order matches AST pre-order (assert by reading back via
-  `lookup_decl` and comparing names).
-- Every `DeclRef` resolves via `lookup_decl`.
-
-Ruby surface: unchanged. Completely additive.
 
 #### PR R2: Rust `Directive` types + `Source::directives`
 
@@ -215,13 +175,14 @@ Files:
 
 - `crates/librbs-core/src/env/insert.rs::insert_rbs_source`: also
   walk `signature().directives()` and return the populated
-  `Vec<Directive>` alongside top-level decls
-  (`Result<(Vec<DeclRef>, Vec<Directive>)>` or a small struct).
-  `Use` clause `type_name`s are already absolute by C-parser
-  invariant, so interning is a direct lookup.
+  `Vec<Directive>` (`Result<Vec<Directive>>` instead of the current
+  `Result<()>`). `Use` clause `type_name`s are already absolute by
+  C-parser invariant, so interning is a direct lookup.
 
-- `crates/librbs-core/src/env/mod.rs::from_loader`: write
-  `source.directives` similarly to R1.
+- `crates/librbs-core/src/env/mod.rs::from_loader`: receive the
+  per-source `Vec<Directive>` from `insert_rbs_source` and write it
+  into the matching `Source::directives` before moving sources into
+  `env`.
 
 - `crates/librbs-core/src/resolver/driver.rs::apply_use_directive`:
   consume from `&source.directives` instead of walking the AST.
@@ -279,7 +240,8 @@ Files:
      `MaterializeCtx::buffer()` cache).
   2. Materialise directives from `&src.directives` (R2) via PR Y1's
      `materialize/directive.rs` → `Array[RBS::AST::Directives::*]`.
-  3. Iterate `&src.declarations` (R1) and recursively materialise
+  3. Iterate `src.parser.signature().declarations()` (filtering
+     non-decl nodes via `is_decl_node`) and recursively materialise
      each top-level decl via the existing per-AST-node materialisers
      (`materialize_class_node`, `materialize_module_node`, …),
      producing `Array[RBS::AST::Declarations::*]`. Recursion into
@@ -442,8 +404,6 @@ followup gated on a real consumer needing it (Steep doesn't today).
 
 Rust foundation:
 
-- [ ] `Source::declarations: Vec<DeclRef>` populated by `from_loader`;
-      length and pre-order match the AST top-level decls.
 - [ ] `Source::directives: Vec<Directive>` populated by
       `insert_rbs_source`; resolver consumes from this field.
 
@@ -472,7 +432,7 @@ Ruby cutover:
 - [ ] After Y3: M3h's `build_entries` / `process_*` / per-entry
       `materialize_*_decl` wrappers are removed; only the per-AST-node
       materialisers remain in `ext/librbs/src/materialize/decl.rs`.
-- [ ] CI green at every PR boundary (R1, R2, Y1, Y2, Y3).
+- [ ] CI green at every PR boundary (R2, Y1, Y2, Y3).
 
 ## References
 
@@ -487,11 +447,11 @@ Ruby cutover:
 - `ext/librbs/src/materialize/decl.rs` (current entry-driven walker;
   Y3 retires `build_entries` and `process_*`, keeps per-AST-node
   materialisers)
-- `crates/librbs-core/src/source.rs` (Rust Source / Buffer; R1 / R2
-  edit target)
-- `crates/librbs-core/src/env/insert.rs::insert_rbs_source` (R1 / R2
-  edit target — top-level decl + directive collection)
-- `crates/librbs-core/src/env/mod.rs::from_loader` (R1 / R2 edit
-  target — wires per-source Vecs into `Source`)
+- `crates/librbs-core/src/source.rs` (Rust Source / Buffer; R2 edit
+  target — adds `Source::directives`)
+- `crates/librbs-core/src/env/insert.rs::insert_rbs_source` (R2 edit
+  target — directive collection)
+- `crates/librbs-core/src/env/mod.rs::from_loader` (R2 edit target —
+  wires per-source `Vec<Directive>` into `Source`)
 - `crates/librbs-core/src/resolver/driver.rs::apply_use_directive`
   (R2 edit target — switch from AST walk to `Source::directives`)
