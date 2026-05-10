@@ -6,3 +6,4 @@ module Librbs
 end
 
 require "librbs/patches/environment"
+require "librbs/patches/location"
