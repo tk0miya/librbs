@@ -18,21 +18,32 @@ rather than implementation. The decision branches into M4a or M4b.
 
 ### 1. Set up the benchmark suite ✅
 
-Create the following under `benchmark/`:
+Two cold-start scripts live under `benchmark/`, each driving the workload
+across all three sizes and both implementations:
 
 ```
 benchmark/
-├── load_only.rb          # from_loader only
-├── load_and_resolve.rb   # from_loader + resolve_type_names
-├── full_use.rb           # adds class_decls.size to trigger materialization
-├── steep_simulation.rb   # mimics real Steep usage (see below)
+├── load_only.rb          # from_loader + materialize
+├── load_and_resolve.rb   # from_loader + resolve_type_names + materialize
 └── helpers.rb
 ```
 
-Each script uses `benchmark-ips` to compare two cases:
+Both scripts call `class_decls.size` at the end so the librbs path
+finishes its one-shot `materialize_all` and we are comparing fully
+realized Ruby state on both sides — pure-Rust work the Ruby caller
+never observes is excluded from the comparison. The difference between
+the two scripts is therefore purely the cost of `resolve_type_names`.
 
-- Pure RBS (do not `require "librbs"`).
-- librbs (do `require`).
+A dedicated `full_use.rb` (load + resolve + materialize) and a
+`steep_simulation.rb` (per-decl walk) were considered and dropped:
+materialization is already in-band on both scripts, and the per-decl
+walk does not add new Ruby-visible work after `materialize_all` has
+populated every Entry. If a future profile suggests post-materialize
+iteration is itself a hotspot, reintroduce a script then.
+
+Pure RBS and librbs cannot coexist in one process (`require "librbs"`
+patches `RBS::Environment` globally), so each measurement runs in its
+own subprocess via `BenchHelpers.run_subprocess`.
 
 ### 2. Measurement matrix
 
@@ -41,34 +52,15 @@ Three input sizes:
 | Case | Contents |
 |---|---|
 | **small** | core only |
-| **medium** | core + stdlib |
-| **large** | core + stdlib + major gems (json, set, bigdecimal, csv, activesupport, etc.) |
+| **medium** | core + a representative subset of stdlib (pathname, date, time, uri, ...) |
+| **large** | core + the gem RBS collection vendored from SeleniumHQ/selenium's `rbs_collection.lock.yaml` (~33 gems via gem_rbs_collection) |
 
-That's 3 sizes × 4 benchmark scripts = 12 numbers.
+That's 3 sizes × 2 benchmark scripts = 6 numbers.
 
-### 3. Steep usage simulation
+The `large` size requires a one-shot `rbs collection install` step —
+see `benchmark/README.md` for the exact command.
 
-To gauge real-world load:
-
-```ruby
-# benchmark/steep_simulation.rb
-loader = RBS::EnvironmentLoader.new
-loader.add(library: "rbs")
-env = RBS::Environment.from_loader(loader).resolve_type_names
-
-# Reproduce Steep's pattern of pulling class_decls for every type name
-env.class_decls.each_value do |entry|
-  entry.each_decl do |decl|
-    decl.type_params if decl.respond_to?(:type_params)
-    decl.members.each { |m| m } if decl.respond_to?(:members)
-  end
-end
-```
-
-Reading Steep's actual source to confirm how `Environment` is used is
-preferable. Use the parallel investigation findings.
-
-### 4. Record results
+### 3. Record results
 
 Write results to `benchmark/results/M4-baseline.md`:
 
@@ -78,7 +70,7 @@ Write results to `benchmark/results/M4-baseline.md`:
 Date: YYYY-MM-DD
 Environment: macOS 14.x / Ruby 3.4.x / Apple M2 (or Linux x86_64 / ...)
 
-## load_and_resolve.rb
+## load_only.rb
 
 | size | pure RBS | librbs (M3) | speedup |
 |---|---|---|---|
@@ -86,28 +78,27 @@ Environment: macOS 14.x / Ruby 3.4.x / Apple M2 (or Linux x86_64 / ...)
 | medium | XXX ms | XXX ms | X.Xx |
 | large | XXX ms | XXX ms | X.Xx |
 
-## full_use.rb
-
-...
-
-## steep_simulation.rb
+## load_and_resolve.rb
 
 ...
 ```
 
-### 5. Decision
+### 4. Decision
 
-Use this flow to choose the next step:
+Use this flow to choose the next step. `load_and_resolve - load_only`
+is the wall-time cost of `resolve_type_names` alone; comparing the two
+speedups tells us where the win is concentrated.
 
 ```
-Look at the speedup factors of load_and_resolve and full_use:
+- load_and_resolve >= 2x AND load_only >= 2x:
+    → Both phases are paying off. M4a (per-Entry lazy
+       materialization) is unnecessary. Proceed to M4b
+       (compatibility-API completion). Goal achieved.
 
-- load_and_resolve >= 2x AND full_use >= 2x:
-    → M4a (per-Entry lazy materialization) is unnecessary.
-       Proceed to M4b (compatibility-API completion). Goal achieved.
-
-- load_and_resolve >= 3x AND full_use < 1.5x:
-    → Materialization is the bottleneck. M4a is worth doing.
+- load_and_resolve >= 3x AND load_only < 1.5x:
+    → Resolve is fast but `from_loader + materialize` dominates
+       wall time. Materialization is the suspected bottleneck;
+       M4a is worth doing.
 
 - load_and_resolve < 1.5x:
     → Something is wrong with M3 (the Rust port of the resolver isn't
@@ -121,7 +112,7 @@ Record the decision in `benchmark/results/M4-decision.md`:
 - Whether to proceed with M4a or M4b
 - The reasoning
 
-### 6. M4a path: additional implementation
+### 5. M4a path: additional implementation
 
 Per-Entry lazy materialization:
 
@@ -134,7 +125,7 @@ Per-Entry lazy materialization:
 Detailed design happens at decision time. This document only sketches the
 shape.
 
-### 7. M4b path: compatibility-API completion
+### 6. M4b path: compatibility-API completion
 
 Cover other `RBS::Environment` methods that Steep / the investigation
 revealed:
@@ -151,7 +142,7 @@ through `ensure_materialized`, requiring minimal additional code.
 
 ## Acceptance
 
-- [ ] `benchmark/results/M4-baseline.md` records all 12 numbers.
+- [ ] `benchmark/results/M4-baseline.md` records all 6 numbers.
 - [ ] `benchmark/results/M4-decision.md` records the decision and reasoning.
 - [ ] Either M4a or M4b is implemented.
 - [ ] Manually verify that running Steep on a real project produces the
@@ -159,35 +150,33 @@ through `ensure_materialized`, requiring minimal additional code.
 
 ## Pitfalls and mitigation
 
-### benchmark-ips assumptions
+### Cold start vs steady state
 
-GC and JIT skew the first run. Trust `Benchmark.ips`'s warmup and run
-enough iterations. Or, use `Benchmark.realtime` to measure **cold-start
-time**, which is more representative for loader code (cold start matters
-more than steady-state for libraries that load once).
+Loader code is paid once per process; cold start matters more than
+steady-state throughput. The two scripts therefore measure
+`Benchmark.realtime` of a freshly built loader on each repeat (see
+`BenchHelpers.measure_realtime`) and report the minimum of N runs.
 
-Report both numbers.
+`BenchHelpers.measure_ips` is also provided for steady-state ips
+comparison via `benchmark-ips`; reach for it only if a specific
+hypothesis needs it.
 
 ### Subprocess isolation
 
-Comparing pure RBS and librbs in the same process is impossible (require
-order interferes). Run each case in a separate Ruby process and have the
-script print `Benchmark.realtime`:
+`require "librbs"` patches `RBS::Environment` globally and there is no
+clean way to undo that in the same process. `helpers.rb` runs each
+(impl × size) combination in its own `ruby -e` subprocess via
+`run_subprocess`, with Bundler env stripped so collection-pulled gems
+resolve.
 
-```ruby
-# benchmark/helpers.rb
-def measure_subprocess(libs, script)
-  full = libs.map { |l| "require '#{l}'" }.join("\n") + "\n" + script
-  out, _, _ = Open3.capture3("ruby", "-e", full)
-  out.to_f  # the script puts realtime at the end
-end
-```
+### Selecting workloads for the large case
 
-### Selecting major gems for the large case
-
-Pick gems **commonly used in projects that adopt Steep**. Adding obscure
-gems doesn't strengthen the decision basis. Rule of thumb: target Rails
-projects with `activesupport`, `actionpack`, `actionmailer`, etc.
+The `large` size sources its gem list from a real-world OSS project's
+`rbs_collection.lock.yaml` (currently SeleniumHQ/selenium, ~33 gems
+pinned to a specific gem_rbs_collection revision). Swap in a different
+project's lockfile rather than hand-curating gem lists — picking gems
+ad-hoc tends to drift toward whatever the author uses, while a
+real lockfile reflects what an actual Steep adopter ships.
 
 ## Next milestone
 
