@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 
 use rayon::prelude::*;
+use rustc_hash::FxHashSet;
 
 pub mod entry;
 pub mod insert;
 pub mod resolution;
 pub mod use_map;
 
-pub use entry::{
-    ClassAliasLikeEntry, ClassLikeEntry, ConstantEntry, GlobalEntry, InterfaceEntry, TypeAliasEntry,
-};
+pub use entry::{ClassAliasEntry, ClassLikeEntry};
 
 use crate::discovery::Loader;
 use crate::error::{Error, Result};
@@ -21,11 +20,11 @@ pub struct Environment {
     pub interner: TypeNameInterner,
     pub sources: Vec<Source>,
     pub class_decls: HashMap<TypeNameSym, ClassLikeEntry>,
-    pub interface_decls: HashMap<TypeNameSym, InterfaceEntry>,
-    pub type_alias_decls: HashMap<TypeNameSym, TypeAliasEntry>,
-    pub constant_decls: HashMap<TypeNameSym, ConstantEntry>,
-    pub class_alias_decls: HashMap<TypeNameSym, ClassAliasLikeEntry>,
-    pub global_decls: HashMap<Sym, GlobalEntry>,
+    pub interface_decls: FxHashSet<TypeNameSym>,
+    pub type_alias_decls: FxHashSet<TypeNameSym>,
+    pub constant_decls: FxHashSet<TypeNameSym>,
+    pub class_alias_decls: HashMap<TypeNameSym, ClassAliasEntry>,
+    pub global_decls: FxHashSet<Sym>,
 }
 
 impl Default for Environment {
@@ -40,11 +39,11 @@ impl Environment {
             interner: TypeNameInterner::new(),
             sources: Vec::new(),
             class_decls: HashMap::new(),
-            interface_decls: HashMap::new(),
-            type_alias_decls: HashMap::new(),
-            constant_decls: HashMap::new(),
+            interface_decls: FxHashSet::default(),
+            type_alias_decls: FxHashSet::default(),
+            constant_decls: FxHashSet::default(),
             class_alias_decls: HashMap::new(),
-            global_decls: HashMap::new(),
+            global_decls: FxHashSet::default(),
         }
     }
 
@@ -72,8 +71,8 @@ impl Environment {
             .collect::<Result<Vec<_>>>()?;
 
         let mut env = Environment::new();
-        for (idx, src) in sources.iter().enumerate() {
-            insert::insert_rbs_source(&mut env, idx as u32, src.parser.signature())?;
+        for src in sources.iter() {
+            insert::insert_rbs_source(&mut env, src.parser.signature())?;
         }
         env.sources = sources;
         Ok(env)

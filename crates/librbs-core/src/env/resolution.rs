@@ -9,8 +9,8 @@
 //! type-name nodes, without needing a positional ID on each AST node.
 //!
 //! This replaces the earlier `(source_index, serial)`-keyed `NodeId`
-//! scheme: `*_decls` is the natural iteration unit for materialization,
-//! so resolutions are best stored alongside it.
+//! scheme: keying on `DeclRef` lets the resolver and the materializer
+//! agree on per-decl pre-order without a positional ID on each AST node.
 
 use rustc_hash::FxHashMap;
 

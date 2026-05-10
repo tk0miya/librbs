@@ -35,9 +35,9 @@ impl Table {
     /// environment before any UseMaps are constructed.
     pub fn populate_from(&mut self, env: &Environment) {
         self.known_types.extend(env.class_decls.keys().copied());
-        self.known_types.extend(env.interface_decls.keys().copied());
+        self.known_types.extend(env.interface_decls.iter().copied());
         self.known_types
-            .extend(env.type_alias_decls.keys().copied());
+            .extend(env.type_alias_decls.iter().copied());
     }
 
     /// Compute the namespace → child-types reverse index. Must be called

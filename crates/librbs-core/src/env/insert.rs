@@ -4,22 +4,14 @@ use ruby_rbs::node::{
 };
 
 use crate::env::Environment;
-use crate::env::entry::{
-    ClassAliasEntry, ClassAliasLikeEntry, ClassEntry, ClassLikeEntry, ConstantEntry, Context,
-    DeclRef, GlobalEntry, InterfaceEntry, ModuleAliasEntry, ModuleEntry, TypeAliasEntry,
-};
+use crate::env::entry::{ClassAliasEntry, ClassLikeEntry, Context};
 use crate::error::{Error, Result};
 use crate::interner::{
     FrozenInterner, NamespaceSym, Sym, TypeNameInterner, TypeNameKind, TypeNameSym,
 };
 
 /// Walk one parsed signature and register its declarations into `env`.
-pub fn insert_rbs_source(
-    env: &mut Environment,
-    source_index: u32,
-    signature: &SignatureNode<'_>,
-) -> Result<()> {
-    let mut counter: u32 = 0;
+pub fn insert_rbs_source(env: &mut Environment, signature: &SignatureNode<'_>) -> Result<()> {
     // Mirrors `prefix: Namespace.root` in `RBS::Environment#resolve_signature`
     // (vendor/rbs/lib/rbs/environment.rb:515) — top-level decls are
     // anchored at the absolute root, so every entry's name is rendered
@@ -27,18 +19,9 @@ pub fn insert_rbs_source(
     let root = env.interner.namespaces.root_absolute();
     let context: Context = Vec::new();
     for decl in signature.declarations().iter() {
-        insert_decl(env, source_index, &mut counter, &decl, &context, root)?;
+        insert_decl(env, &decl, &context, root)?;
     }
     Ok(())
-}
-
-fn assign_decl_index(counter: &mut u32, source_index: u32) -> DeclRef {
-    let idx = *counter;
-    *counter += 1;
-    DeclRef {
-        source_index,
-        decl_index: idx,
-    }
 }
 
 /// Convert a parsed `TypeNameNode` into a [`TypeNameSym`] by interning
@@ -305,37 +288,24 @@ fn intern_function_param(interner: &mut TypeNameInterner, p: &Node<'_>) {
 
 fn insert_decl(
     env: &mut Environment,
-    source_index: u32,
-    counter: &mut u32,
     decl: &Node<'_>,
     context: &Context,
     namespace: NamespaceSym,
 ) -> Result<()> {
-    let decl_ref = assign_decl_index(counter, source_index);
-
     match decl {
         Node::Class(c) => {
             let inner = intern_type_name_node(&mut env.interner, &c.name());
             let name = env.interner.with_prefix(namespace, inner);
             check_constant_collision(env, name)?;
-            let existing = env.class_decls.get(&name);
-            match existing {
-                Some(ClassLikeEntry::Module(_)) => {
+            match env.class_decls.get(&name) {
+                Some(ClassLikeEntry::Module) => {
                     return Err(Error::DuplicatedDeclaration {
                         name: env.interner.to_string(name),
                     });
                 }
-                Some(ClassLikeEntry::Class(_)) | None => {}
+                Some(ClassLikeEntry::Class) | None => {}
             }
-            env.class_decls
-                .entry(name)
-                .or_insert_with(|| {
-                    ClassLikeEntry::Class(ClassEntry {
-                        name,
-                        context_decls: Vec::new(),
-                    })
-                })
-                .push(context.clone(), decl_ref);
+            env.class_decls.entry(name).or_insert(ClassLikeEntry::Class);
 
             intern_class_refs(&mut env.interner, c);
 
@@ -344,7 +314,7 @@ fn insert_decl(
             inner_ctx.push(name);
             for member in c.members().iter() {
                 if is_decl_node(&member) {
-                    insert_decl(env, source_index, counter, &member, &inner_ctx, inner_ns)?;
+                    insert_decl(env, &member, &inner_ctx, inner_ns)?;
                 } else {
                     intern_member(&mut env.interner, &member);
                 }
@@ -354,24 +324,17 @@ fn insert_decl(
             let inner = intern_type_name_node(&mut env.interner, &m.name());
             let name = env.interner.with_prefix(namespace, inner);
             check_constant_collision(env, name)?;
-            let existing = env.class_decls.get(&name);
-            match existing {
-                Some(ClassLikeEntry::Class(_)) => {
+            match env.class_decls.get(&name) {
+                Some(ClassLikeEntry::Class) => {
                     return Err(Error::DuplicatedDeclaration {
                         name: env.interner.to_string(name),
                     });
                 }
-                Some(ClassLikeEntry::Module(_)) | None => {}
+                Some(ClassLikeEntry::Module) | None => {}
             }
             env.class_decls
                 .entry(name)
-                .or_insert_with(|| {
-                    ClassLikeEntry::Module(ModuleEntry {
-                        name,
-                        context_decls: Vec::new(),
-                    })
-                })
-                .push(context.clone(), decl_ref);
+                .or_insert(ClassLikeEntry::Module);
 
             intern_module_refs(&mut env.interner, m);
 
@@ -380,7 +343,7 @@ fn insert_decl(
             inner_ctx.push(name);
             for member in m.members().iter() {
                 if is_decl_node(&member) {
-                    insert_decl(env, source_index, counter, &member, &inner_ctx, inner_ns)?;
+                    insert_decl(env, &member, &inner_ctx, inner_ns)?;
                 } else {
                     intern_member(&mut env.interner, &member);
                 }
@@ -389,38 +352,22 @@ fn insert_decl(
         Node::Interface(i) => {
             let inner = intern_type_name_node(&mut env.interner, &i.name());
             let name = env.interner.with_prefix(namespace, inner);
-            if env.interface_decls.contains_key(&name) {
+            if !env.interface_decls.insert(name) {
                 return Err(Error::DuplicatedDeclaration {
                     name: env.interner.to_string(name),
                 });
             }
-            env.interface_decls.insert(
-                name,
-                InterfaceEntry {
-                    name,
-                    context: context.clone(),
-                    decl: decl_ref,
-                },
-            );
 
             intern_interface_refs(&mut env.interner, i);
         }
         Node::TypeAlias(a) => {
             let inner = intern_type_name_node(&mut env.interner, &a.name());
             let name = env.interner.with_prefix(namespace, inner);
-            if env.type_alias_decls.contains_key(&name) {
+            if !env.type_alias_decls.insert(name) {
                 return Err(Error::DuplicatedDeclaration {
                     name: env.interner.to_string(name),
                 });
             }
-            env.type_alias_decls.insert(
-                name,
-                TypeAliasEntry {
-                    name,
-                    context: context.clone(),
-                    decl: decl_ref,
-                },
-            );
 
             intern_type_params(&mut env.interner, &a.type_params());
             intern_type(&mut env.interner, &a.type_());
@@ -434,33 +381,18 @@ fn insert_decl(
                     name: env.interner.to_string(name),
                 });
             }
-            env.constant_decls.insert(
-                name,
-                ConstantEntry {
-                    name,
-                    context: context.clone(),
-                    decl: decl_ref,
-                },
-            );
+            env.constant_decls.insert(name);
 
             intern_type(&mut env.interner, &c.type_());
         }
         Node::Global(g) => {
             let name_node = g.name();
             let name = env.interner.symbols.intern(name_node.as_str());
-            if env.global_decls.contains_key(&name) {
+            if !env.global_decls.insert(name) {
                 return Err(Error::DuplicatedDeclaration {
                     name: env.interner.symbols.lookup(name).to_string(),
                 });
             }
-            env.global_decls.insert(
-                name,
-                GlobalEntry {
-                    name,
-                    context: context.clone(),
-                    decl: decl_ref,
-                },
-            );
 
             intern_type(&mut env.interner, &g.type_());
         }
@@ -476,12 +408,10 @@ fn insert_decl(
             }
             env.class_alias_decls.insert(
                 name,
-                ClassAliasLikeEntry::Class(ClassAliasEntry {
-                    name,
+                ClassAliasEntry {
                     old_name,
                     context: context.clone(),
-                    decl: decl_ref,
-                }),
+                },
             );
         }
         Node::ModuleAlias(ma) => {
@@ -496,12 +426,10 @@ fn insert_decl(
             }
             env.class_alias_decls.insert(
                 name,
-                ClassAliasLikeEntry::Module(ModuleAliasEntry {
-                    name,
+                ClassAliasEntry {
                     old_name,
                     context: context.clone(),
-                    decl: decl_ref,
-                }),
+                },
             );
         }
         _ => {
@@ -537,7 +465,7 @@ pub fn is_decl_node(n: &Node<'_>) -> bool {
 }
 
 fn check_constant_collision(env: &Environment, name: TypeNameSym) -> Result<()> {
-    if env.constant_decls.contains_key(&name) || env.class_alias_decls.contains_key(&name) {
+    if env.constant_decls.contains(&name) || env.class_alias_decls.contains_key(&name) {
         return Err(Error::DuplicatedDeclaration {
             name: env.interner.to_string(name),
         });
@@ -553,7 +481,7 @@ mod tests {
     fn parse_and_insert(src: &str) -> Environment {
         let parser = ManagedParser::parse(src.to_string()).unwrap();
         let mut env = Environment::new();
-        insert_rbs_source(&mut env, 0, parser.signature()).unwrap();
+        insert_rbs_source(&mut env, parser.signature()).unwrap();
         env
     }
 
