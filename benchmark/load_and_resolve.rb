@@ -1,0 +1,16 @@
+# frozen_string_literal: true
+
+# Measures `from_loader` + `resolve_type_names` + full materialization.
+# Represents the full "give me a usable RBS::Environment" pipeline as a
+# Ruby caller sees it.
+#
+#     bundle exec ruby benchmark/load_and_resolve.rb
+
+require_relative "helpers"
+
+EXPR = <<~RUBY
+  env = RBS::Environment.from_loader(loader).resolve_type_names
+  env.class_decls.size
+RUBY
+
+BenchHelpers.report_realtime(title: "load_and_resolve.rb", expr: EXPR)

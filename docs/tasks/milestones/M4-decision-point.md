@@ -16,7 +16,7 @@ rather than implementation. The decision branches into M4a or M4b.
 
 ## Tasks
 
-### 1. Set up the benchmark suite
+### 1. Set up the benchmark suite ✅
 
 Create the following under `benchmark/`:
 
