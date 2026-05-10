@@ -29,6 +29,9 @@ use crate::materialize::type_name::materialize_resolved_type_name;
 /// `Node` variant — the exhaustive match arms cover every variant
 /// listed in `walk_type`.
 pub fn materialize_type(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::Type,
+    );
     match node {
         Node::BoolType(_) => bases_only(ctx, node, ctx.classes.types_bases_bool),
         Node::VoidType(_) => bases_only(ctx, node, ctx.classes.types_bases_void),

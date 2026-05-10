@@ -337,10 +337,18 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     for (index, source) in env.sources.iter().enumerate() {
         let source_value =
             materialize::source::materialize_source_rbs(&mut ctx, index as u32, source)?;
+        let _g =
+            materialize::phase_timer::PhaseTimer::new(materialize::phase_timer::Phase::AddSource);
         let _: Value = env_ruby.funcall("add_source", (source_value,))?;
     }
 
     Ok(ruby.qnil().as_value())
+}
+
+/// `Librbs::Native.materialize_phase_dump` — return + reset per-phase
+/// self-time counters captured during `materialize_all`.
+fn materialize_phase_dump() -> Result<String, Error> {
+    Ok(materialize::phase_timer::dump_and_reset())
 }
 
 fn build_environment(loader: Value) -> Result<Value, Error> {
@@ -396,6 +404,10 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.define_singleton_method("build_environment", function!(build_environment, 1))?;
     module.define_singleton_method("resolve_type_names", function!(resolve_type_names, 2))?;
     module.define_singleton_method("materialize_all", function!(materialize_all, 1))?;
+    module.define_singleton_method(
+        "materialize_phase_dump",
+        function!(materialize_phase_dump, 0),
+    )?;
 
     Ok(())
 }

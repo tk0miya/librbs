@@ -31,6 +31,9 @@ pub fn materialize_source_rbs(
     source_index: u32,
     source: &Source,
 ) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::SourceRbs,
+    );
     // Install `source` as the active source: stores `source_index`
     // for nested-decl `DeclRef` assembly and eagerly builds the
     // `RBS::Buffer` so every `make_location` inside this source

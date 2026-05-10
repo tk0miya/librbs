@@ -14,6 +14,11 @@
 mkmf.log
 target/
 
+# Allocation-mode stackprof dumps explode in size (~180 MB on the
+# `large` fixture). The wall-mode dump is small enough to keep, but
+# alloc-mode is regenerated locally and never committed.
+stackprof_alloc_*.dump
+
 # rspec failure tracking
 .rspec_status
 

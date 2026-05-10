@@ -30,6 +30,9 @@ pub fn materialize_method_type(
     ctx: &mut MaterializeCtx<'_>,
     node: &MethodTypeNode<'_>,
 ) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::MethodType,
+    );
     let loc = make_location(ctx, &node.location())?;
     add_required_child(ctx, loc, "type", &node.type_location())?;
     add_optional_child(

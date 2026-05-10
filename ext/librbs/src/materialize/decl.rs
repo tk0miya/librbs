@@ -78,6 +78,9 @@ fn materialize_top_decl_node(
     root_ns: NamespaceSym,
     counter: &mut u32,
 ) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::Declaration,
+    );
     match node {
         Node::Class(c) => {
             let full_name = full_decl_name(ctx, &c.name(), root_ns);
@@ -441,6 +444,9 @@ fn materialize_nested_decl(
     parent_namespace: NamespaceSym,
     counter: &mut u32,
 ) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::NestedDecl,
+    );
     let nested_decl_index = *counter;
     *counter += 1;
     let nested_decl_ref = DeclRef {

@@ -40,6 +40,9 @@ pub fn materialize_directives(
     directives: NodeList<'_>,
     content: &str,
 ) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::Directives,
+    );
     let arr = ctx.ruby.ary_new();
     if let Some(magic) = materialize_magic_comment(ctx, content)? {
         arr.push(magic)?;

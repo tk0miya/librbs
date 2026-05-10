@@ -32,6 +32,9 @@ use crate::materialize::type_name::materialize_resolved_type_name;
 /// variant has its own arm, and unrelated `Node` variants panic so a
 /// future parser change forces this list to be updated.
 pub fn materialize_member(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result<Value, Error> {
+    let _t = crate::materialize::phase_timer::PhaseTimer::new(
+        crate::materialize::phase_timer::Phase::Member,
+    );
     match node {
         Node::MethodDefinition(m) => method_definition(ctx, m),
         Node::AttrAccessor(a) => attr_accessor(ctx, a),

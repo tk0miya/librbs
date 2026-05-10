@@ -12,10 +12,12 @@ use magnus::{Error, IntoValue, Value, prelude::*, value::ReprValue};
 use ruby_rbs::node::RBSLocationRange;
 
 use crate::materialize::MaterializeCtx;
+use crate::materialize::phase_timer::{Phase, PhaseTimer};
 
 /// `RBS::Location.new(buffer, start_char, end_char)` for the current
 /// source. Reads the active buffer from [`MaterializeCtx::buffer`].
 pub fn make_location(ctx: &MaterializeCtx<'_>, range: &RBSLocationRange) -> Result<Value, Error> {
+    let _t = PhaseTimer::new(Phase::Location);
     let buffer = ctx.buffer();
     let start = range.start_char();
     let end = range.end_char();

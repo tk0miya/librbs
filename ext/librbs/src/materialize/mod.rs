@@ -21,6 +21,7 @@ pub mod directive;
 pub mod location;
 pub mod member;
 pub mod method_type;
+pub mod phase_timer;
 pub mod source;
 pub mod type_;
 pub mod type_name;
