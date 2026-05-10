@@ -9,17 +9,19 @@
 //! (types, members, decls) lands in M3f / M3g / M3h.
 
 use magnus::{Error, RClass, Ruby, Value, kwargs, prelude::*, value::ReprValue};
-use rustc_hash::FxHashMap;
 
 use librbs_core::Environment;
+use librbs_core::Source;
 use librbs_core::env::entry::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
 use librbs_core::interner::FrozenInterner;
 
 pub mod decl;
+pub mod directive;
 pub mod location;
 pub mod member;
 pub mod method_type;
+pub mod source;
 pub mod type_;
 pub mod type_name;
 pub mod type_param;
@@ -87,14 +89,11 @@ pub struct ClassRefs {
     pub decls_global: RClass,
     pub decls_class_alias: RClass,
     pub decls_module_alias: RClass,
-    pub entry_class: RClass,
-    pub entry_module: RClass,
-    pub entry_interface: RClass,
-    pub entry_type_alias: RClass,
-    pub entry_constant: RClass,
-    pub entry_global: RClass,
-    pub entry_class_alias: RClass,
-    pub entry_module_alias: RClass,
+    pub directives_use: RClass,
+    pub directives_use_single_clause: RClass,
+    pub directives_use_wildcard_clause: RClass,
+    pub directives_resolve_type_names: RClass,
+    pub source_rbs: RClass,
 }
 
 impl ClassRefs {
@@ -158,29 +157,27 @@ impl ClassRefs {
             decls_global: ruby.eval("RBS::AST::Declarations::Global")?,
             decls_class_alias: ruby.eval("RBS::AST::Declarations::ClassAlias")?,
             decls_module_alias: ruby.eval("RBS::AST::Declarations::ModuleAlias")?,
-            entry_class: ruby.eval("RBS::Environment::ClassEntry")?,
-            entry_module: ruby.eval("RBS::Environment::ModuleEntry")?,
-            entry_interface: ruby.eval("RBS::Environment::InterfaceEntry")?,
-            entry_type_alias: ruby.eval("RBS::Environment::TypeAliasEntry")?,
-            entry_constant: ruby.eval("RBS::Environment::ConstantEntry")?,
-            entry_global: ruby.eval("RBS::Environment::GlobalEntry")?,
-            entry_class_alias: ruby.eval("RBS::Environment::ClassAliasEntry")?,
-            entry_module_alias: ruby.eval("RBS::Environment::ModuleAliasEntry")?,
+            directives_use: ruby.eval("RBS::AST::Directives::Use")?,
+            directives_use_single_clause: ruby.eval("RBS::AST::Directives::Use::SingleClause")?,
+            directives_use_wildcard_clause: ruby
+                .eval("RBS::AST::Directives::Use::WildcardClause")?,
+            directives_resolve_type_names: ruby.eval("RBS::AST::Directives::ResolveTypeNames")?,
+            source_rbs: ruby.eval("RBS::Source::RBS")?,
         })
     }
 }
 
 /// Per-source state threaded through every materialize helper.
 ///
-/// The materializer iterates `env.*_decls`. For each decl it calls
-/// [`enter_decl`] before walking the decl's AST subtree, which sets up
-/// the `current_resolutions` slice from `resolution.get(decl_ref)`.
-/// As the AST walk encounters type-name occurrences,
-/// [`pull_resolution`] consumes from that slice in pre-order — the
-/// same pre-order `resolver::driver::record_type_name` recorded in.
-/// The materializer's walker (M3f–M3h) must mirror the driver's AST
-/// traversal exactly; drift surfaces as a canonical-dump compat
-/// failure in M3h.
+/// The materializer iterates `env.sources` (via `materialize_all`).
+/// For each source it calls [`enter_source`] to install
+/// `source_index` plus the source's `RBS::Buffer`; for each decl it
+/// calls [`enter_decl`] before walking the decl's AST subtree, which
+/// sets up the `current_resolutions` slice from
+/// `resolution.get(decl_ref)`. As the AST walk encounters type-name
+/// occurrences, [`pull_resolution`] consumes from that slice in
+/// pre-order — the same pre-order `resolver::driver::record_type_name`
+/// recorded in.
 pub struct MaterializeCtx<'a> {
     /// `&Ruby` is held so helpers (`type_name.rs`, `location.rs`) can
     /// allocate Ruby objects without re-acquiring the GVL handle. M3e
@@ -198,33 +195,26 @@ pub struct MaterializeCtx<'a> {
     /// nothing at runtime.
     pub interner: FrozenInterner<'a>,
     pub resolution: Option<&'a Resolution>,
-    /// The source whose buffer / decls are currently being materialized.
-    /// Switch via [`set_source`] when moving between sources within
-    /// one materialization session — the [`buffers`] cache below
-    /// survives the switch, so coming back to a previously-seen
-    /// source re-uses the existing `RBS::Buffer` value (object
-    /// identity, not just value equivalence).
+    /// The source whose buffer / decls are currently being
+    /// materialized. Set by [`enter_source`]; read by
+    /// `materialize_nested_decl` when assembling per-decl
+    /// `DeclRef`s.
     pub source_index: u32,
     pub classes: ClassRefs,
-    /// Cached `RBS::Buffer` per source index. Built lazily on the
-    /// first `make_location` call for that source and re-used
-    /// thereafter so every `RBS::Location` from the same source
-    /// shares one Buffer (upstream RBS uses Buffer identity in some
-    /// equality checks). M3h's `materialize_all` creates a single
-    /// `MaterializeCtx`, iterates `env.*_decls`, and switches
-    /// `source_index` per decl — so even with N decls spread across
-    /// M sources, only M Buffers are ever allocated.
+    /// `RBS::Buffer` for the current source. Built once by
+    /// [`enter_source`] and reused for every `make_location` call
+    /// inside that source — upstream RBS uses Buffer identity in
+    /// some equality checks, so every `RBS::Location` from one
+    /// source must share the same Ruby object. `None` before the
+    /// first `enter_source` call, which the [`buffer`] accessor
+    /// treats as a panic-worthy contract violation.
     ///
-    /// Cached `Value`s stay alive across calls because the very first
-    /// `Location` built from a Buffer keeps it reachable from Ruby
-    /// (the Location holds a reference, and the Location itself ends
-    /// up attached to a materialized AST node which is in turn
-    /// attached to `@class_decls` etc.). Without that anchor a GC
-    /// run between cache miss and the next `make_location` could
-    /// reclaim the Buffer; if M3h ever surfaces such a race, switch
-    /// to a Ruby-side container (e.g. an `Array` ivar on the env)
-    /// instead of this Rust-side map.
-    buffers: FxHashMap<u32, Value>,
+    /// The cached `Value` stays alive across calls because the
+    /// first `Location` built from it keeps it reachable from Ruby
+    /// (the Location holds a reference, and the Location itself
+    /// ends up attached to a materialised AST node which is in turn
+    /// reachable from `@sources` after `add_source`).
+    current_buffer: Option<Value>,
     /// Slice of resolutions for the decl currently being walked, set
     /// via [`enter_decl`]. `None` when the env was never resolved or
     /// when the current decl was filtered out by `only:` / a magic
@@ -236,16 +226,17 @@ pub struct MaterializeCtx<'a> {
     cursor: usize,
 }
 
-/// Saved cursor state for `MaterializeCtx`. M3h's nested-decl recursion
-/// swaps the per-decl resolution slice when descending into a child decl
-/// and restores the parent's slice on return — without this, a nested
-/// `class Foo; class Bar; end; def baz: ...; end` would leak cursor
-/// advancement from `Bar`'s slice into `Foo`'s, and the next
-/// `pull_resolution` for `Foo` would consume an entry meant for `Bar`.
+/// Saved cursor state for `MaterializeCtx`. The nested-decl recursion
+/// swaps the per-decl resolution slice when descending into a child
+/// decl and restores the parent's slice on return — without this, a
+/// nested `class Foo; class Bar; end; def baz: ...; end` would leak
+/// cursor advancement from `Bar`'s slice into `Foo`'s, and the next
+/// `pull_resolution` for `Foo` would consume an entry meant for
+/// `Bar`. `source_index` and `current_buffer` are not snapshotted —
+/// nested decls always live in the same source as their parent.
 pub struct CursorState<'a> {
     current_resolutions: Option<&'a [ResolvedRef]>,
     cursor: usize,
-    source_index: u32,
 }
 
 impl<'a> MaterializeCtx<'a> {
@@ -253,7 +244,6 @@ impl<'a> MaterializeCtx<'a> {
         ruby: &'a Ruby,
         env: &'a Environment,
         resolution: Option<&'a Resolution>,
-        source_index: u32,
         classes: ClassRefs,
     ) -> Self {
         Self {
@@ -261,20 +251,32 @@ impl<'a> MaterializeCtx<'a> {
             env,
             interner: env.interner.frozen(),
             resolution,
-            source_index,
+            source_index: 0,
             classes,
-            buffers: FxHashMap::default(),
+            current_buffer: None,
             current_resolutions: None,
             cursor: 0,
         }
     }
 
-    /// Switch the active source. The buffer cache survives, so
-    /// returning to a previously-active source picks up the same
-    /// `RBS::Buffer` value. Used by M3h's `materialize_all` as it
-    /// iterates `env.*_decls` and crosses source boundaries.
-    pub fn set_source(&mut self, source_index: u32) {
+    /// Install `source` as the active source: store its `source_index`
+    /// for nested-decl `DeclRef` assembly and eagerly build its
+    /// `RBS::Buffer` so every `make_location` inside this source
+    /// shares one Ruby object. Called once per source by
+    /// [`crate::materialize::source::materialize_source_rbs`] before
+    /// any AST walk for that source begins.
+    pub fn enter_source(&mut self, source_index: u32, source: &Source) -> Result<(), Error> {
         self.source_index = source_index;
+        let path_str = source.buffer.name.to_string_lossy().to_string();
+        let pathname = self.classes.pathname.new_instance((path_str,))?.as_value();
+        let content = source.buffer.content.as_str();
+        let buffer = self
+            .classes
+            .buffer
+            .new_instance((kwargs!("name" => pathname, "content" => content),))?
+            .as_value();
+        self.current_buffer = Some(buffer);
+        Ok(())
     }
 
     /// Snapshot the resolution cursor state so a nested-decl recursion
@@ -284,14 +286,12 @@ impl<'a> MaterializeCtx<'a> {
         CursorState {
             current_resolutions: self.current_resolutions,
             cursor: self.cursor,
-            source_index: self.source_index,
         }
     }
 
     pub fn restore_cursor(&mut self, state: CursorState<'a>) {
         self.current_resolutions = state.current_resolutions;
         self.cursor = state.cursor;
-        self.source_index = state.source_index;
     }
 
     /// Set the resolution slice for `decl_ref` as the cursor's source.
@@ -324,25 +324,11 @@ impl<'a> MaterializeCtx<'a> {
         Some(r)
     }
 
-    /// Lazily build (and cache) `RBS::Buffer.new(name:, content:)` for
-    /// the current source. Subsequent calls for the same source
-    /// return the same `Value` (object identity), and switching to a
-    /// different source via [`set_source`] does not evict prior
-    /// entries.
-    pub fn buffer(&mut self) -> Result<Value, Error> {
-        if let Some(buf) = self.buffers.get(&self.source_index) {
-            return Ok(*buf);
-        }
-        let src = &self.env.sources[self.source_index as usize];
-        let path_str = src.buffer.name.to_string_lossy().to_string();
-        let pathname = self.classes.pathname.new_instance((path_str,))?.as_value();
-        let content = src.buffer.content.as_str();
-        let buffer = self
-            .classes
-            .buffer
-            .new_instance((kwargs!("name" => pathname, "content" => content),))?
-            .as_value();
-        self.buffers.insert(self.source_index, buffer);
-        Ok(buffer)
+    /// Return the active source's `RBS::Buffer`. [`enter_source`]
+    /// must have been called first; calling this before that is a
+    /// programming error in the materialiser and panics.
+    pub fn buffer(&self) -> Value {
+        self.current_buffer
+            .expect("MaterializeCtx::enter_source must be called before make_location")
     }
 }

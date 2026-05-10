@@ -296,14 +296,18 @@ unsafe fn read_resolution_ptr(env_ruby: Value) -> Result<Option<*const Resolutio
     Ok(Some(Arc::as_ptr(&wrapped.0)))
 }
 
-/// `Librbs::Native.materialize_all(env)` — walk every source's AST,
-/// build the six entry hashes (`class_decls`, `interface_decls`,
-/// `type_alias_decls`, `constant_decls`, `class_alias_decls`,
-/// `global_decls`), and attach them to `env`'s upstream-visible ivars.
+/// `Librbs::Native.materialize_all(env)` — for each Rust source,
+/// build a `RBS::Source::RBS` (buffer + directives + decls) and pass
+/// it to upstream `RBS::Environment#add_source`. The upstream
+/// `add_source` populates `@sources` plus the six `*_decls` ivars
+/// using the same code path the pure-Ruby loader uses, so
+/// `source.declarations[i].equal?(class_decls[name].decls[k].decl)`
+/// holds at every nesting level by construction.
 ///
-/// Idempotent: a second call observes `@__librbs_materialized = true`
-/// and returns immediately so the six hashes preserve their object
-/// identity across repeat accessor calls.
+/// Idempotent: `@__librbs_materialized = true` is set before the
+/// first `add_source` call so any patched accessor re-entered from
+/// inside upstream's indexing short-circuits, and a second top-level
+/// call returns immediately.
 fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     let ruby = Ruby::get().expect("Ruby thread");
     let mat = ivar_get(env_ruby, "@__librbs_materialized")?;
@@ -322,33 +326,19 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     let resolution_ptr = unsafe { read_resolution_ptr(env_ruby)? };
     let resolution: Option<&Resolution> = resolution_ptr.map(|p| unsafe { &*p });
     let classes = materialize::ClassRefs::resolve(&ruby)?;
-    let mut ctx = MaterializeCtx::new(&ruby, env, resolution, 0, classes);
+    let mut ctx = MaterializeCtx::new(&ruby, env, resolution, classes);
 
-    let hashes = materialize::decl::build_entries(&mut ctx)?;
-
-    ivar_set(env_ruby, "@class_decls", hashes.class_decls.as_value())?;
-    ivar_set(
-        env_ruby,
-        "@interface_decls",
-        hashes.interface_decls.as_value(),
-    )?;
-    ivar_set(
-        env_ruby,
-        "@type_alias_decls",
-        hashes.type_alias_decls.as_value(),
-    )?;
-    ivar_set(
-        env_ruby,
-        "@constant_decls",
-        hashes.constant_decls.as_value(),
-    )?;
-    ivar_set(
-        env_ruby,
-        "@class_alias_decls",
-        hashes.class_alias_decls.as_value(),
-    )?;
-    ivar_set(env_ruby, "@global_decls", hashes.global_decls.as_value())?;
+    // Set the materialised flag *before* invoking `add_source` so any
+    // patched accessor reached during upstream's indexing
+    // (`add_source` → `insert_rbs_decl` → ivar reads on the env)
+    // short-circuits past `ensure_materialized` instead of recursing.
     ivar_set(env_ruby, "@__librbs_materialized", ruby.qtrue().as_value())?;
+
+    for (index, source) in env.sources.iter().enumerate() {
+        let source_value =
+            materialize::source::materialize_source_rbs(&mut ctx, index as u32, source)?;
+        let _: Value = env_ruby.funcall("add_source", (source_value,))?;
+    }
 
     Ok(ruby.qnil().as_value())
 }
