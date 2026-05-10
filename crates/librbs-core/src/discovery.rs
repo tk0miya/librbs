@@ -22,6 +22,11 @@ pub enum SourceTag {
 pub struct Library {
     pub name: String,
     pub version: Option<String>,
+    /// Pre-resolved sig path. Used for libraries sourced from installed
+    /// gems' `sig/` directories — RBS resolves those via
+    /// `Gem::Specification.find_by_name` on the Ruby side, and the result
+    /// is forwarded here so Rust does not re-implement gem lookup.
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -60,6 +65,20 @@ impl Loader {
         self.libs.push(Library {
             name: name.into(),
             version,
+            path: None,
+        });
+    }
+
+    pub fn add_library_with_path(
+        &mut self,
+        name: impl Into<String>,
+        version: Option<String>,
+        path: impl Into<PathBuf>,
+    ) {
+        self.libs.push(Library {
+            name: name.into(),
+            version,
+            path: Some(path.into()),
         });
     }
 
@@ -75,7 +94,11 @@ impl Loader {
         // Clone libs first to avoid borrow conflicts with repository.
         let libs = self.libs.clone();
         for lib in &libs {
-            match self.repository.lookup(&lib.name, lib.version.as_deref()) {
+            let resolved = lib
+                .path
+                .clone()
+                .or_else(|| self.repository.lookup(&lib.name, lib.version.as_deref()));
+            match resolved {
                 Some(p) => out.push((
                     SourceTag::Library {
                         name: lib.name.clone(),
