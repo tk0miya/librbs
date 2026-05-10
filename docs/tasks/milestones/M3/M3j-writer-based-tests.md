@@ -215,22 +215,34 @@ fail under seeded mutations.
 
 ## Acceptance
 
-- [ ] `spec/support/writer_oracle.rb` exists and is the only place
+- [x] `spec/support/writer_oracle.rb` exists and is the only place
       `RBS::Writer.new` is constructed in the spec tree.
-- [ ] `spec/unit/materialize_spec.rb`'s entry-shape block is
+- [x] `spec/unit/materialize_spec.rb`'s entry-shape block is
       Writer-driven, covering the eight `write_decl` branches plus
       open-class plus one nested-decl case. Re-entrancy and
       pure-Ruby fallback examples are unchanged.
-- [ ] `spec/compat/per_decl_writer_spec.rb` is green for the same
+- [x] `spec/compat/per_decl_writer_spec.rb` is green for the same
       curated core set M3h's `object_spec.rb` covered, both
-      unresolved and `resolve_type_names`-applied.
-- [ ] `spec/compat/object_spec.rb` is deleted, not commented out.
-- [ ] `canonical_dump` bulk-parity specs from M3i remain unchanged
+      unresolved and `resolve_type_names`-applied. The Writer
+      oracle initially exposed a real M3h bug (the entry's
+      absolute key was being reused as `decl.name`); the fix lands
+      in this slice as a one-spot native change in
+      `ext/librbs/src/materialize/decl.rs` — each `materialize_*_node`
+      derives its own decl-self name from the literal AST `name_node`
+      via the new `literal_decl_name` helper, so the source form
+      (relative vs. absolute) is preserved.
+- [x] `spec/compat/object_spec.rb` is deleted, not commented out.
+      (The M3h cleanup stopped short of materialising it as its own
+      file; the per-name parity coverage M3h had landed inline in
+      `materialize_spec.rb` is now superseded by
+      `per_decl_writer_spec.rb`.)
+- [x] `canonical_dump` bulk-parity specs from M3i remain unchanged
       and green.
-- [ ] The location/buffer-identity spec (whatever M3h's cleanup
+- [x] The location/buffer-identity spec (whatever M3h's cleanup
       produced) remains unchanged and green.
-- [ ] CI green; the diff touches only `spec/`, `spec/support/`,
-      and `docs/tasks/milestones/M3/`.
+- [x] CI green; the diff touches `spec/`, `spec/support/`,
+      `docs/tasks/`, and (for the M3h decl-self-name fix surfaced
+      by this slice) `ext/librbs/src/materialize/decl.rs`.
 
 ## References
 
