@@ -20,16 +20,28 @@ module Librbs
         Librbs::Native.resolve_type_names(self, only_array)
       end
 
-      # Each of the six `*_decls` accessors triggers a one-shot
-      # materialization on first access, then defers to the upstream
-      # ivar reader. `super()` ends up reading the
-      # `RBS::Environment::ClassEntry` etc. hash that
-      # `Librbs::Native.materialize_all` just wrote onto the instance.
+      # Each source-derived accessor triggers a one-shot materialization
+      # on first access, then defers to the upstream ivar reader.
+      # `super()` ends up reading the `@sources` Array and the six
+      # `*_decls` Hashes that upstream `add_source` wrote during
+      # materialisation. `declarations` is `attr_reader`-less upstream
+      # (defined as `sources.flat_map(&:declarations)`); we trigger
+      # materialisation and let the upstream method recompute.
       %i[class_decls interface_decls type_alias_decls
-         constant_decls class_alias_decls global_decls].each do |m|
+         constant_decls class_alias_decls global_decls
+         sources declarations].each do |m|
         define_method(m) do
           ensure_materialized
           super()
+        end
+      end
+
+      # Block-taking variants need an explicit `&block` shuttle so
+      # `super(&block)` passes through the caller's block unchanged.
+      %i[each_rbs_source each_ruby_source].each do |m|
+        define_method(m) do |&block|
+          ensure_materialized
+          super(&block)
         end
       end
 

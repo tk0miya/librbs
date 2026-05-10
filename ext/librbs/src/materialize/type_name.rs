@@ -17,9 +17,32 @@
 use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
 
 use librbs_core::env::resolution::ResolvedRef;
-use librbs_core::interner::TypeNameSym;
+use librbs_core::interner::{NamespaceSym, TypeNameSym};
 
 use crate::materialize::MaterializeCtx;
+
+/// Build `RBS::Namespace.new(path:, absolute:)` from an interned namespace
+/// symbol. Shared between `build_type_name_from_sym` and the directive
+/// materialiser (which needs a freestanding `RBS::Namespace` for
+/// `Use::WildcardClause#namespace`).
+pub fn materialize_namespace(
+    ctx: &MaterializeCtx<'_>,
+    ns_sym: NamespaceSym,
+    absolute: bool,
+) -> Result<Value, Error> {
+    let interner = ctx.interner;
+    let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
+    let path_array = ctx.ruby.ary_new();
+    for s in path_syms {
+        let seg = interner.symbols().lookup(*s);
+        path_array.push(ctx.ruby.to_symbol(seg))?;
+    }
+    Ok(ctx
+        .classes
+        .namespace
+        .new_instance((kwargs!("path" => path_array, "absolute" => absolute),))?
+        .as_value())
+}
 
 /// Build `RBS::TypeName` from the AST-interned `raw` symbol exactly as
 /// written in the source. The result is marked `absolute!` only when
@@ -68,26 +91,12 @@ fn build_type_name_from_sym(
 ) -> Result<Value, Error> {
     let interner = ctx.interner;
     let (ns_sym, name_sym, _kind) = interner.lookup(sym);
-    let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
-
-    let path_array = ctx.ruby.ary_new();
-    for s in path_syms {
-        let seg = interner.symbols().lookup(*s);
-        path_array.push(ctx.ruby.to_symbol(seg))?;
-    }
+    let namespace = materialize_namespace(ctx, ns_sym, mark_absolute)?;
     let leaf = ctx.ruby.to_symbol(interner.symbols().lookup(name_sym));
-
-    let namespace = ctx
-        .classes
-        .namespace
-        .new_instance((kwargs!("path" => path_array, "absolute" => mark_absolute),))?
-        .as_value();
-
     let type_name: Value = ctx
         .classes
         .type_name
         .new_instance((kwargs!("namespace" => namespace, "name" => leaf),))?
         .as_value();
-
     Ok(type_name)
 }

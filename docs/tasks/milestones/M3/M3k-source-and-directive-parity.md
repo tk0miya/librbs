@@ -338,30 +338,30 @@ followup gated on a real consumer needing it (Steep doesn't today).
 
 Ruby cutover:
 
-- [ ] `materialize_all` issues one `env.add_source(Source::RBS.new(…))`
+- [x] `materialize_all` issues one `env.add_source(Source::RBS.new(…))`
       per Rust source; no direct `*_decls` ivar writes from Rust.
-- [ ] `env.sources` returns a populated `Array[RBS::Source::RBS]`
+- [x] `env.sources` returns a populated `Array[RBS::Source::RBS]`
       after the first source-derived (or `*_decls`) accessor call.
-- [ ] `env.declarations.size` and shape matches a pure-RBS subprocess
+- [x] `env.declarations.size` and shape matches a pure-RBS subprocess
       for the curated fixture set.
-- [ ] Object-identity invariant holds within one env at every nesting
+- [x] Object-identity invariant holds within one env at every nesting
       level: `source.declarations[i].equal?(class_decls[name].decls[j].decl)`
       and the analogous assertion for nested decls reachable via
       `members`.
-- [ ] `each_rbs_source` / `each_ruby_source` patches trigger
+- [x] `each_rbs_source` / `each_ruby_source` patches trigger
       materialisation and yield the correct sources.
-- [ ] Directive materialiser covers `Use` (both clause kinds) and
+- [x] Directive materialiser covers `Use` (both clause kinds) and
       `ResolveTypeNames`; round-trip tests pass.
-- [ ] Re-entrancy: `materialize_all` twice still a no-op; `@sources`
+- [x] Re-entrancy: `materialize_all` twice still a no-op; `@sources`
       retains object identity across repeated accessor calls;
       accessors re-entered from inside `add_source` do not recurse
       into materialisation.
-- [ ] Pure-Ruby `RBS::Environment.new` path remains untouched (no
+- [x] Pure-Ruby `RBS::Environment.new` path remains untouched (no
       `@__librbs_handle` → accessors fall through to `super()`).
-- [ ] After Y3: M3h's `build_entries` / `process_*` / per-entry
+- [x] After Y3: M3h's `build_entries` / `process_*` / per-entry
       `materialize_*_decl` wrappers are removed; only the per-AST-node
       materialisers remain in `ext/librbs/src/materialize/decl.rs`.
-- [ ] CI green at every PR boundary (Y1, Y2, Y3).
+- [x] CI green at every PR boundary (Y1, Y2, Y3).
 
 ## References
 
