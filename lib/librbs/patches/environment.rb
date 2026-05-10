@@ -51,10 +51,23 @@ module Librbs
       # the `instance_variable_defined?` guard preserves their
       # accessor's no-op fast path (the upstream initializer already
       # set `@class_decls = {}` etc.).
+      #
+      # GC is disabled for the duration of `materialize_all` because the
+      # native side allocates ~2.3 M short-lived Ruby objects per pass
+      # (Location, TypeName, Namespace, Types::*) and the resulting GC
+      # pressure dominates wall-clock time — disabling GC here roughly
+      # halves materialise time on the `large` benchmark fixture.
+      # `GC.disable` returns the previous state, so a caller that had
+      # already disabled GC keeps that state on exit.
       def ensure_materialized
         return if @__librbs_materialized
         return unless instance_variable_defined?(:@__librbs_handle)
-        Librbs::Native.materialize_all(self)
+        was_disabled = GC.disable
+        begin
+          Librbs::Native.materialize_all(self)
+        ensure
+          GC.enable unless was_disabled
+        end
       end
     end
   end
