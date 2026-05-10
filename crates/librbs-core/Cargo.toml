@@ -12,3 +12,4 @@ walkdir = "2.5"
 thiserror = "2"
 
 [dev-dependencies]
+pprof = { version = "0.15", features = ["flamegraph"] }
