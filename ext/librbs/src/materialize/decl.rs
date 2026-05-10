@@ -21,6 +21,7 @@ use librbs_core::env::entry::{ClassAliasLikeEntry, ClassLikeEntry, Context, Decl
 use librbs_core::env::insert::{find_type_name_node, is_decl_node};
 use librbs_core::interner::{NamespaceSym, Sym, TypeNameSym};
 use librbs_core::resolver::driver::lookup_decl;
+use rustc_hash::FxHashMap;
 use ruby_rbs::node::{
     ClassAliasNode, ClassNode, ClassSuperNode, ConstantNode, GlobalNode, InterfaceNode,
     ModuleAliasNode, ModuleNode, ModuleSelfNode, Node, TypeAliasNode,
@@ -43,6 +44,13 @@ pub struct EntryHashes {
     pub constant_decls: RHash,
     pub class_alias_decls: RHash,
     pub global_decls: RHash,
+    /// Top-level Ruby decl `Value`s keyed by [`DeclRef`]. Used by
+    /// `materialize_all` to populate each `Source::RBS#declarations`
+    /// while preserving object identity with the corresponding entry
+    /// (`source.declarations[i].equal?(class_decls[name].decls[k].decl)`).
+    /// Nested decls do not appear here — `Source::RBS#declarations`
+    /// only stores the top-level pre-order list per upstream's contract.
+    pub top_level_decls: FxHashMap<DeclRef, Value>,
 }
 
 /// Walk every entry in `env.*_decls` and build the matching Ruby
@@ -52,13 +60,14 @@ pub struct EntryHashes {
 /// re-traversal.
 pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error> {
     let ruby = ctx.ruby;
-    let hashes = EntryHashes {
+    let mut hashes = EntryHashes {
         class_decls: ruby.hash_new(),
         interface_decls: ruby.hash_new(),
         type_alias_decls: ruby.hash_new(),
         constant_decls: ruby.hash_new(),
         class_alias_decls: ruby.hash_new(),
         global_decls: ruby.hash_new(),
+        top_level_decls: FxHashMap::default(),
     };
 
     // Snapshot each entry hash up front so iteration doesn't keep a
@@ -79,7 +88,7 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in class_snapshots {
-        process_class_like(ctx, &hashes.class_decls, snap)?;
+        process_class_like(ctx, &hashes.class_decls, &mut hashes.top_level_decls, snap)?;
     }
 
     let interface_snapshots: Vec<SingleSnapshot> = ctx
@@ -93,7 +102,12 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in interface_snapshots {
-        process_interface(ctx, &hashes.interface_decls, snap)?;
+        process_interface(
+            ctx,
+            &hashes.interface_decls,
+            &mut hashes.top_level_decls,
+            snap,
+        )?;
     }
 
     let type_alias_snapshots: Vec<SingleSnapshot> = ctx
@@ -107,7 +121,12 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in type_alias_snapshots {
-        process_type_alias(ctx, &hashes.type_alias_decls, snap)?;
+        process_type_alias(
+            ctx,
+            &hashes.type_alias_decls,
+            &mut hashes.top_level_decls,
+            snap,
+        )?;
     }
 
     let constant_snapshots: Vec<SingleSnapshot> = ctx
@@ -121,7 +140,12 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in constant_snapshots {
-        process_constant(ctx, &hashes.constant_decls, snap)?;
+        process_constant(
+            ctx,
+            &hashes.constant_decls,
+            &mut hashes.top_level_decls,
+            snap,
+        )?;
     }
 
     let class_alias_snapshots: Vec<ClassAliasSnapshot> = ctx
@@ -140,7 +164,12 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in class_alias_snapshots {
-        process_class_alias(ctx, &hashes.class_alias_decls, snap)?;
+        process_class_alias(
+            ctx,
+            &hashes.class_alias_decls,
+            &mut hashes.top_level_decls,
+            snap,
+        )?;
     }
 
     let global_snapshots: Vec<GlobalSnapshot> = ctx
@@ -154,7 +183,12 @@ pub fn build_entries(ctx: &mut MaterializeCtx<'_>) -> Result<EntryHashes, Error>
         })
         .collect();
     for snap in global_snapshots {
-        process_global(ctx, &hashes.global_decls, snap)?;
+        process_global(
+            ctx,
+            &hashes.global_decls,
+            &mut hashes.top_level_decls,
+            snap,
+        )?;
     }
 
     Ok(hashes)
@@ -191,6 +225,7 @@ struct GlobalSnapshot {
 fn process_class_like(
     ctx: &mut MaterializeCtx<'_>,
     hash: &RHash,
+    top_level: &mut FxHashMap<DeclRef, Value>,
     snap: ClassLikeSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
@@ -209,6 +244,9 @@ fn process_class_like(
     for (rust_ctx, decl_ref) in snap.context_decls {
         let ruby_ctx = build_ruby_context(ctx, &rust_ctx)?;
         let ruby_decl = materialize_class_or_module_decl(ctx, snap.name, decl_ref, my_ns)?;
+        if rust_ctx.is_empty() {
+            top_level.insert(decl_ref, ruby_decl);
+        }
         let pair = ctx.ruby.ary_new_capa(2);
         pair.push(ruby_ctx)?;
         pair.push(ruby_decl)?;
@@ -222,11 +260,15 @@ fn process_class_like(
 fn process_interface(
     ctx: &mut MaterializeCtx<'_>,
     hash: &RHash,
+    top_level: &mut FxHashMap<DeclRef, Value>,
     snap: SingleSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, NodeKind::Interface)?;
+    if snap.context.is_empty() {
+        top_level.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_interface
@@ -243,11 +285,15 @@ fn process_interface(
 fn process_type_alias(
     ctx: &mut MaterializeCtx<'_>,
     hash: &RHash,
+    top_level: &mut FxHashMap<DeclRef, Value>,
     snap: SingleSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, NodeKind::TypeAlias)?;
+    if snap.context.is_empty() {
+        top_level.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_type_alias
@@ -264,11 +310,15 @@ fn process_type_alias(
 fn process_constant(
     ctx: &mut MaterializeCtx<'_>,
     hash: &RHash,
+    top_level: &mut FxHashMap<DeclRef, Value>,
     snap: SingleSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
     let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, NodeKind::Constant)?;
+    if snap.context.is_empty() {
+        top_level.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_constant
@@ -285,6 +335,7 @@ fn process_constant(
 fn process_class_alias(
     ctx: &mut MaterializeCtx<'_>,
     hash: &RHash,
+    top_level: &mut FxHashMap<DeclRef, Value>,
     snap: ClassAliasSnapshot,
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
@@ -295,6 +346,9 @@ fn process_class_alias(
         NodeKind::ModuleAlias
     };
     let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, kind)?;
+    if snap.context.is_empty() {
+        top_level.insert(snap.decl, ruby_decl);
+    }
     let entry_class = if snap.is_class {
         ctx.classes.entry_class_alias
     } else {
@@ -317,6 +371,7 @@ fn process_class_alias(
 fn process_global(
     ctx: &mut MaterializeCtx<'_>,
     hash: &RHash,
+    top_level: &mut FxHashMap<DeclRef, Value>,
     snap: GlobalSnapshot,
 ) -> Result<(), Error> {
     let name_str = ctx.interner.symbols().lookup(snap.name).to_string();
@@ -333,6 +388,9 @@ fn process_global(
         unreachable!("global entry decl_ref does not point to a global");
     };
     let ruby_decl = materialize_global_node(ctx, &g)?;
+    if snap.context.is_empty() {
+        top_level.insert(snap.decl, ruby_decl);
+    }
     let entry = ctx
         .classes
         .entry_global

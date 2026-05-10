@@ -7,8 +7,11 @@ use magnus::{
 };
 use rustc_hash::FxHashSet;
 
+use librbs_core::env::entry::DeclRef;
+use librbs_core::env::insert::is_decl_node;
 use librbs_core::env::resolution::Resolution;
 use librbs_core::interner::{Sym, TypeNameInterner, TypeNameKind, TypeNameSym};
+use ruby_rbs::node::Node;
 
 mod materialize;
 
@@ -326,6 +329,31 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
 
     let hashes = materialize::decl::build_entries(&mut ctx)?;
 
+    // Build `@sources` after the entry hashes — `top_level_decls` is
+    // populated by `build_entries` and we re-use those Ruby decl values
+    // here so `source.declarations[i].equal?(<entry's decl>)`.
+    let sources_ary = ruby.ary_new();
+    for (src_idx, src) in env.sources.iter().enumerate() {
+        let src_idx = src_idx as u32;
+        ctx.set_source(src_idx);
+        let directives_ary = materialize::directive::build_directives(&mut ctx, src)?;
+        let decls_ary = ruby.ary_new();
+        let mut counter: u32 = 0;
+        for top_decl in src.parser.signature().declarations().iter() {
+            let decl_ref = DeclRef {
+                source_index: src_idx,
+                decl_index: counter,
+            };
+            if let Some(value) = hashes.top_level_decls.get(&decl_ref) {
+                decls_ary.push(*value)?;
+            }
+            counter += count_decls_in_subtree(&top_decl);
+        }
+        let source_value =
+            materialize::source::build_rbs_source(&mut ctx, src, directives_ary, decls_ary)?;
+        sources_ary.push(source_value)?;
+    }
+
     ivar_set(env_ruby, "@class_decls", hashes.class_decls.as_value())?;
     ivar_set(
         env_ruby,
@@ -348,9 +376,36 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
         hashes.class_alias_decls.as_value(),
     )?;
     ivar_set(env_ruby, "@global_decls", hashes.global_decls.as_value())?;
+    ivar_set(env_ruby, "@sources", sources_ary.as_value())?;
     ivar_set(env_ruby, "@__librbs_materialized", ruby.qtrue().as_value())?;
 
     Ok(ruby.qnil().as_value())
+}
+
+/// Pre-order count of decl nodes rooted at `node` — mirrors the
+/// numbering `env::insert::insert_decl` and `resolver::driver::consume_decl_ref`
+/// share. Used by `materialize_all` to advance through a source's
+/// `signature().declarations()` while reading the per-source top-level
+/// `DeclRef`s out of `EntryHashes::top_level_decls`.
+fn count_decls_in_subtree(node: &Node<'_>) -> u32 {
+    if !is_decl_node(node) {
+        return 0;
+    }
+    let mut count: u32 = 1;
+    match node {
+        Node::Class(c) => {
+            for member in c.members().iter() {
+                count += count_decls_in_subtree(&member);
+            }
+        }
+        Node::Module(m) => {
+            for member in m.members().iter() {
+                count += count_decls_in_subtree(&member);
+            }
+        }
+        _ => {}
+    }
+    count
 }
 
 fn build_environment(loader: Value) -> Result<Value, Error> {

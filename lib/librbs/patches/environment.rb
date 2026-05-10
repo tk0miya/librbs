@@ -25,11 +25,24 @@ module Librbs
       # ivar reader. `super()` ends up reading the
       # `RBS::Environment::ClassEntry` etc. hash that
       # `Librbs::Native.materialize_all` just wrote onto the instance.
+      # `sources` and `declarations` are part of the same source-derived
+      # API surface and get the same treatment so the @sources ivar
+      # populated by materialization is observed.
       %i[class_decls interface_decls type_alias_decls
-         constant_decls class_alias_decls global_decls].each do |m|
+         constant_decls class_alias_decls global_decls
+         sources declarations].each do |m|
         define_method(m) do
           ensure_materialized
           super()
+        end
+      end
+
+      # Source-iterator accessors fan out from `@sources`; trigger
+      # materialization the same way before delegating upstream.
+      %i[each_rbs_source each_ruby_source].each do |m|
+        define_method(m) do |&block|
+          ensure_materialized
+          super(&block)
         end
       end
 
