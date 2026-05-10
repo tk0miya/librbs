@@ -208,7 +208,7 @@ fn process_class_like(
 
     for (rust_ctx, decl_ref) in snap.context_decls {
         let ruby_ctx = build_ruby_context(ctx, &rust_ctx)?;
-        let ruby_decl = materialize_class_or_module_decl(ctx, ruby_name, decl_ref, my_ns)?;
+        let ruby_decl = materialize_class_or_module_decl(ctx, snap.name, decl_ref, my_ns)?;
         let pair = ctx.ruby.ary_new_capa(2);
         pair.push(ruby_ctx)?;
         pair.push(ruby_decl)?;
@@ -226,7 +226,7 @@ fn process_interface(
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
-    let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Interface)?;
+    let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, NodeKind::Interface)?;
     let entry = ctx
         .classes
         .entry_interface
@@ -247,7 +247,7 @@ fn process_type_alias(
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
-    let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::TypeAlias)?;
+    let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, NodeKind::TypeAlias)?;
     let entry = ctx
         .classes
         .entry_type_alias
@@ -268,7 +268,7 @@ fn process_constant(
 ) -> Result<(), Error> {
     let ruby_name = materialize_type_name(ctx, snap.name)?;
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
-    let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Constant)?;
+    let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, NodeKind::Constant)?;
     let entry = ctx
         .classes
         .entry_constant
@@ -294,7 +294,7 @@ fn process_class_alias(
     } else {
         NodeKind::ModuleAlias
     };
-    let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, kind)?;
+    let ruby_decl = materialize_single_decl(ctx, snap.name, snap.decl, kind)?;
     let entry_class = if snap.is_class {
         ctx.classes.entry_class_alias
     } else {
@@ -322,7 +322,17 @@ fn process_global(
     let name_str = ctx.interner.symbols().lookup(snap.name).to_string();
     let ruby_name = ctx.ruby.to_symbol(&name_str).as_value();
     let ruby_ctx = build_ruby_context(ctx, &snap.context)?;
-    let ruby_decl = materialize_single_decl(ctx, ruby_name, snap.decl, NodeKind::Global)?;
+    // Globals key by Symbol, not TypeNameSym, so they go straight
+    // to `materialize_global_node` rather than through the
+    // TypeName-shaped `materialize_single_decl` dispatcher.
+    ctx.set_source(snap.decl.source_index);
+    ctx.enter_decl(snap.decl);
+    let src = source_ref(ctx, snap.decl.source_index);
+    let ast = lookup_decl(src, snap.decl).expect("global decl_ref points to a real decl");
+    let Node::Global(g) = ast else {
+        unreachable!("global entry decl_ref does not point to a global");
+    };
+    let ruby_decl = materialize_global_node(ctx, &g)?;
     let entry = ctx
         .classes
         .entry_global
@@ -341,7 +351,6 @@ enum NodeKind {
     Interface,
     TypeAlias,
     Constant,
-    Global,
     ClassAlias,
     ModuleAlias,
 }
@@ -350,9 +359,15 @@ enum NodeKind {
 /// and dispatch to the per-variant builder. Used by SingleEntry-style
 /// decls (interfaces, type aliases, constants, globals, aliases),
 /// which never contain nested decls so the local counter stays unused.
+///
+/// Each per-AST-node materializer derives the decl's own `name` from
+/// its literal `name_node` so the resulting Ruby decl preserves the
+/// source-form (relative vs. absolute) the user wrote, matching pure
+/// RBS. The entry-key absolute name is computed separately by the
+/// caller (`process_*`).
 fn materialize_single_decl(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     decl_ref: DeclRef,
     kind: NodeKind,
 ) -> Result<Value, Error> {
@@ -361,17 +376,16 @@ fn materialize_single_decl(
     let src = source_ref(ctx, decl_ref.source_index);
     let ast = lookup_decl(src, decl_ref).expect("entry decl_ref points to a real decl");
     match (kind, ast) {
-        (NodeKind::Interface, Node::Interface(i)) => materialize_interface_node(ctx, ruby_name, &i),
+        (NodeKind::Interface, Node::Interface(i)) => materialize_interface_node(ctx, full_name, &i),
         (NodeKind::TypeAlias, Node::TypeAlias(a)) => {
-            materialize_type_alias_node(ctx, ruby_name, &a)
+            materialize_type_alias_node(ctx, full_name, &a)
         }
-        (NodeKind::Constant, Node::Constant(c)) => materialize_constant_node(ctx, ruby_name, &c),
-        (NodeKind::Global, Node::Global(g)) => materialize_global_node(ctx, ruby_name, &g),
+        (NodeKind::Constant, Node::Constant(c)) => materialize_constant_node(ctx, full_name, &c),
         (NodeKind::ClassAlias, Node::ClassAlias(a)) => {
-            materialize_class_alias_node(ctx, ruby_name, &a)
+            materialize_class_alias_node(ctx, full_name, &a)
         }
         (NodeKind::ModuleAlias, Node::ModuleAlias(a)) => {
-            materialize_module_alias_node(ctx, ruby_name, &a)
+            materialize_module_alias_node(ctx, full_name, &a)
         }
         _ => unreachable!("entry kind/AST node mismatch — env::insert invariant violated"),
     }
@@ -384,7 +398,7 @@ fn materialize_single_decl(
 /// `enter_decl`.
 fn materialize_class_or_module_decl(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     decl_ref: DeclRef,
     my_namespace: NamespaceSym,
 ) -> Result<Value, Error> {
@@ -394,8 +408,8 @@ fn materialize_class_or_module_decl(
     let ast = lookup_decl(src, decl_ref).expect("entry decl_ref points to a real decl");
     let mut counter = decl_ref.decl_index + 1;
     match ast {
-        Node::Class(c) => materialize_class_node(ctx, ruby_name, &c, my_namespace, &mut counter),
-        Node::Module(m) => materialize_module_node(ctx, ruby_name, &m, my_namespace, &mut counter),
+        Node::Class(c) => materialize_class_node(ctx, full_name, &c, my_namespace, &mut counter),
+        Node::Module(m) => materialize_module_node(ctx, full_name, &m, my_namespace, &mut counter),
         _ => unreachable!("class entry decl_ref does not point to class/module"),
     }
 }
@@ -414,7 +428,7 @@ fn source_ref<'a>(ctx: &MaterializeCtx<'a>, index: u32) -> &'a Source {
 
 fn materialize_class_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     node: &ClassNode<'_>,
     my_namespace: NamespaceSym,
     counter: &mut u32,
@@ -430,6 +444,8 @@ fn materialize_class_node(
         node.type_params_location().as_ref(),
     )?;
     add_optional_child(ctx, loc, "lt", node.lt_location().as_ref())?;
+
+    let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
 
     // Order must match `walk_class` in the resolver driver: type_params
     // first (advance cursor through bound types), then super_class
@@ -469,7 +485,7 @@ fn materialize_class_node(
 
 fn materialize_module_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     node: &ModuleNode<'_>,
     my_namespace: NamespaceSym,
     counter: &mut u32,
@@ -487,6 +503,7 @@ fn materialize_module_node(
     add_optional_child(ctx, loc, "colon", node.colon_location().as_ref())?;
     add_optional_child(ctx, loc, "self_types", node.self_types_location().as_ref())?;
 
+    let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
 
     let self_types = ctx.ruby.ary_new();
@@ -526,7 +543,7 @@ fn materialize_module_node(
 
 fn materialize_interface_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     node: &InterfaceNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
@@ -540,6 +557,7 @@ fn materialize_interface_node(
         node.type_params_location().as_ref(),
     )?;
 
+    let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
 
     let members = ctx.ruby.ary_new();
@@ -565,7 +583,7 @@ fn materialize_interface_node(
 
 fn materialize_type_alias_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     node: &TypeAliasNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
@@ -579,6 +597,7 @@ fn materialize_type_alias_node(
         node.type_params_location().as_ref(),
     )?;
 
+    let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
     let target_node = node.type_();
     let ty = materialize_type(ctx, &target_node)?;
@@ -600,13 +619,14 @@ fn materialize_type_alias_node(
 
 fn materialize_constant_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
+    full_name: TypeNameSym,
     node: &ConstantNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     add_required_child(ctx, loc, "name", &node.name_location())?;
     add_required_child(ctx, loc, "colon", &node.colon_location())?;
 
+    let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let target_node = node.type_();
     let ty = materialize_type(ctx, &target_node)?;
     let comment = build_comment(ctx, node.comment())?;
@@ -626,13 +646,13 @@ fn materialize_constant_node(
 
 fn materialize_global_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_name: Value,
     node: &GlobalNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     add_required_child(ctx, loc, "name", &node.name_location())?;
     add_required_child(ctx, loc, "colon", &node.colon_location())?;
 
+    let ruby_name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
     let target_node = node.type_();
     let ty = materialize_type(ctx, &target_node)?;
     let comment = build_comment(ctx, node.comment())?;
@@ -652,7 +672,7 @@ fn materialize_global_node(
 
 fn materialize_class_alias_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_new_name: Value,
+    full_new_name: TypeNameSym,
     node: &ClassAliasNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
@@ -661,6 +681,7 @@ fn materialize_class_alias_node(
     add_required_child(ctx, loc, "eq", &node.eq_location())?;
     add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
 
+    let ruby_new_name = decl_self_name(ctx, &node.new_name(), full_new_name)?;
     let raw_old = find_type_name_node(ctx.interner, &node.old_name())
         .expect("alias old_name pre-interned by insert");
     let old_name_v = materialize_resolved_type_name(ctx, raw_old)?;
@@ -682,7 +703,7 @@ fn materialize_class_alias_node(
 
 fn materialize_module_alias_node(
     ctx: &mut MaterializeCtx<'_>,
-    ruby_new_name: Value,
+    full_new_name: TypeNameSym,
     node: &ModuleAliasNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
@@ -691,6 +712,7 @@ fn materialize_module_alias_node(
     add_required_child(ctx, loc, "eq", &node.eq_location())?;
     add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
 
+    let ruby_new_name = decl_self_name(ctx, &node.new_name(), full_new_name)?;
     let raw_old = find_type_name_node(ctx.interner, &node.old_name())
         .expect("alias old_name pre-interned by insert");
     let old_name_v = materialize_resolved_type_name(ctx, raw_old)?;
@@ -731,54 +753,48 @@ fn materialize_nested_decl(
     let saved = ctx.save_cursor();
     ctx.enter_decl(nested_decl_ref);
 
+    // Compute the absolute full name once per nested decl. Pure-RBS
+    // resolve_type_names rewrites `decl.name` to this form via
+    // `with_prefix`; `decl_self_name` consults `ctx.resolution` and
+    // chooses between this absolute form (resolved env) and the
+    // literal source form (unresolved env).
     let result = match member {
         Node::Class(c) => {
             let full_name = full_decl_name(ctx, &c.name(), parent_namespace);
-            let ruby_name = materialize_type_name(ctx, full_name)?;
             let inner_ns = ctx
                 .interner
                 .to_namespace(full_name)
                 .expect("nested class namespace pre-interned by insert");
-            materialize_class_node(ctx, ruby_name, c, inner_ns, counter)
+            materialize_class_node(ctx, full_name, c, inner_ns, counter)
         }
         Node::Module(m) => {
             let full_name = full_decl_name(ctx, &m.name(), parent_namespace);
-            let ruby_name = materialize_type_name(ctx, full_name)?;
             let inner_ns = ctx
                 .interner
                 .to_namespace(full_name)
                 .expect("nested module namespace pre-interned by insert");
-            materialize_module_node(ctx, ruby_name, m, inner_ns, counter)
+            materialize_module_node(ctx, full_name, m, inner_ns, counter)
         }
         Node::Interface(i) => {
             let full_name = full_decl_name(ctx, &i.name(), parent_namespace);
-            let ruby_name = materialize_type_name(ctx, full_name)?;
-            materialize_interface_node(ctx, ruby_name, i)
+            materialize_interface_node(ctx, full_name, i)
         }
         Node::TypeAlias(a) => {
             let full_name = full_decl_name(ctx, &a.name(), parent_namespace);
-            let ruby_name = materialize_type_name(ctx, full_name)?;
-            materialize_type_alias_node(ctx, ruby_name, a)
+            materialize_type_alias_node(ctx, full_name, a)
         }
         Node::Constant(c) => {
             let full_name = full_decl_name(ctx, &c.name(), parent_namespace);
-            let ruby_name = materialize_type_name(ctx, full_name)?;
-            materialize_constant_node(ctx, ruby_name, c)
+            materialize_constant_node(ctx, full_name, c)
         }
-        Node::Global(g) => {
-            let name_str = g.name().as_str().to_string();
-            let ruby_name = ctx.ruby.to_symbol(&name_str).as_value();
-            materialize_global_node(ctx, ruby_name, g)
-        }
+        Node::Global(g) => materialize_global_node(ctx, g),
         Node::ClassAlias(a) => {
             let full_new_name = full_decl_name(ctx, &a.new_name(), parent_namespace);
-            let ruby_new_name = materialize_type_name(ctx, full_new_name)?;
-            materialize_class_alias_node(ctx, ruby_new_name, a)
+            materialize_class_alias_node(ctx, full_new_name, a)
         }
         Node::ModuleAlias(a) => {
             let full_new_name = full_decl_name(ctx, &a.new_name(), parent_namespace);
-            let ruby_new_name = materialize_type_name(ctx, full_new_name)?;
-            materialize_module_alias_node(ctx, ruby_new_name, a)
+            materialize_module_alias_node(ctx, full_new_name, a)
         }
         _ => unreachable!("materialize_nested_decl called on non-decl"),
     };
@@ -804,6 +820,35 @@ fn full_decl_name(
     ctx.interner
         .with_prefix(parent_namespace, inner)
         .expect("absolute decl name pre-interned by insert")
+}
+
+/// Build the Ruby `RBS::TypeName` for a decl's *own* name. Mirrors
+/// upstream's two-phase handling:
+///
+/// - Unresolved env (no `Resolution` attached): `decl.name` keeps the
+///   source form (relative if the source did not write `::Foo`),
+///   matching pure RBS's parser output verbatim.
+/// - Resolved env: `RBS::Environment#resolve_type_names` walks every
+///   decl and rewrites its `name` via `with_prefix(prefix)` — the
+///   net effect is the entry-key absolute form. Materialization with
+///   a resolution side-table reproduces that rewrite by using
+///   `full_name` directly.
+///
+/// This is separate from the entry-key absolute name that
+/// `class_decls` is keyed by — the entry key is always absolute on
+/// both sides and is computed by the caller from `snap.name` /
+/// `full_decl_name`.
+fn decl_self_name(
+    ctx: &MaterializeCtx<'_>,
+    name_node: &ruby_rbs::node::TypeNameNode<'_>,
+    full_name: TypeNameSym,
+) -> Result<Value, Error> {
+    let sym = if ctx.resolution.is_some() {
+        full_name
+    } else {
+        find_type_name_node(ctx.interner, name_node).expect("decl name pre-interned by insert")
+    };
+    materialize_type_name(ctx, sym)
 }
 
 /// Convert `Context = Vec<TypeNameSym>` into upstream's nil-cons-cell
