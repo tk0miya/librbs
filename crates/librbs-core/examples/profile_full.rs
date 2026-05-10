@@ -71,8 +71,10 @@ fn read_and_parse(files: &[(SourceTag, PathBuf)]) -> Result<Vec<Source>> {
                 .strip_prefix('\u{FEFF}')
                 .map(|s| s.to_string())
                 .unwrap_or(content);
-            Source::new(tag.clone(), path.clone(), content)
-                .map_err(|message| Error::Parse { path: path.clone(), message })
+            Source::new(tag.clone(), path.clone(), content).map_err(|message| Error::Parse {
+                path: path.clone(),
+                message,
+            })
         })
         .collect()
 }
@@ -107,7 +109,10 @@ fn main() -> Result<()> {
         one_pipeline(&mut loader)?;
     }
     let one_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    eprintln!("size={size}  one pass ≈ {:.2} ms  iterations={iterations}", one_ms);
+    eprintln!(
+        "size={size}  one pass ≈ {:.2} ms  iterations={iterations}",
+        one_ms
+    );
 
     let guard = pprof::ProfilerGuardBuilder::default()
         .frequency(1000)
@@ -133,12 +138,18 @@ fn main() -> Result<()> {
 
     // Aggregate inclusive samples for high-level phase frames.
     let phase_markers: &[(&str, &str)] = &[
-        ("insert::insert_rbs_source", "librbs_core::env::insert::insert_rbs_source"),
-        ("Source::new (parse)",       "librbs_core::source::Source::new"),
-        ("ManagedParser::parse",      "librbs_core::source::ManagedParser::parse"),
-        ("read_to_string",            "std::fs::read_to_string"),
-        ("rayon par_iter",            "rayon::iter"),
-        ("walkdir/discover",          "librbs_core::discovery"),
+        (
+            "insert::insert_rbs_source",
+            "librbs_core::env::insert::insert_rbs_source",
+        ),
+        ("Source::new (parse)", "librbs_core::source::Source::new"),
+        (
+            "ManagedParser::parse",
+            "librbs_core::source::ManagedParser::parse",
+        ),
+        ("read_to_string", "std::fs::read_to_string"),
+        ("rayon par_iter", "rayon::iter"),
+        ("walkdir/discover", "librbs_core::discovery"),
     ];
 
     let mut totals: HashMap<&str, usize> = HashMap::new();

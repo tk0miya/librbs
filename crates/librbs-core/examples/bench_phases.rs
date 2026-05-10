@@ -76,8 +76,10 @@ fn read_and_parse(files: &[(SourceTag, PathBuf)]) -> Result<Vec<Source>> {
                 .strip_prefix('\u{FEFF}')
                 .map(|s| s.to_string())
                 .unwrap_or(content);
-            Source::new(tag.clone(), path.clone(), content)
-                .map_err(|message| Error::Parse { path: path.clone(), message })
+            Source::new(tag.clone(), path.clone(), content).map_err(|message| Error::Parse {
+                path: path.clone(),
+                message,
+            })
         })
         .collect()
 }
@@ -168,8 +170,10 @@ fn report(size: &str, repeats: usize) -> Result<()> {
     let min_of = |f: fn(&Times) -> f64| runs.iter().map(f).fold(f64::INFINITY, f64::min);
 
     println!();
-    println!("== size = {} ==  files={}  ({} repeats, reporting min)",
-             size, warm.files, repeats);
+    println!(
+        "== size = {} ==  files={}  ({} repeats, reporting min)",
+        size, warm.files, repeats
+    );
     println!("{:-<60}", "");
     let phase = |name: &str, f: fn(&Times) -> f64| {
         println!("  {:<14} {:>8.2} ms", name, min_of(f));

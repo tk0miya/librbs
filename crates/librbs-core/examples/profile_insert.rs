@@ -74,8 +74,10 @@ fn read_and_parse(files: &[(SourceTag, PathBuf)]) -> Result<Vec<Source>> {
                 .strip_prefix('\u{FEFF}')
                 .map(|s| s.to_string())
                 .unwrap_or(content);
-            Source::new(tag.clone(), path.clone(), content)
-                .map_err(|message| Error::Parse { path: path.clone(), message })
+            Source::new(tag.clone(), path.clone(), content).map_err(|message| Error::Parse {
+                path: path.clone(),
+                message,
+            })
         })
         .collect()
 }
@@ -83,10 +85,7 @@ fn read_and_parse(files: &[(SourceTag, PathBuf)]) -> Result<Vec<Source>> {
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let size = args.next().unwrap_or_else(|| "large".to_string());
-    let iterations: usize = args
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(200);
+    let iterations: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(200);
 
     let mut loader = make_loader(&size);
     let files = loader.discover_files()?;
@@ -106,8 +105,11 @@ fn main() -> Result<()> {
         std::hint::black_box(&env);
     }
     let one_pass_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    eprintln!("one insert pass ≈ {:.2} ms; total ≈ {:.2} s",
-              one_pass_ms, one_pass_ms * iterations as f64 / 1000.0);
+    eprintln!(
+        "one insert pass ≈ {:.2} ms; total ≈ {:.2} s",
+        one_pass_ms,
+        one_pass_ms * iterations as f64 / 1000.0
+    );
 
     // Start sampling profiler.
     let guard = pprof::ProfilerGuardBuilder::default()
@@ -128,7 +130,9 @@ fn main() -> Result<()> {
     eprintln!("profiled {} iterations in {:.2} s", iterations, elapsed);
 
     let report = guard.report().build().expect("report");
-    let out = std::env::current_dir().unwrap().join(format!("flamegraph_insert_{size}.svg"));
+    let out = std::env::current_dir()
+        .unwrap()
+        .join(format!("flamegraph_insert_{size}.svg"));
     let f = File::create(&out).expect("create svg");
     report.flamegraph(f).expect("write flamegraph");
     eprintln!("wrote {}", out.display());
