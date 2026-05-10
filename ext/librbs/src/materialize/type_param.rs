@@ -74,7 +74,7 @@ pub fn materialize_type_params(
     ctx: &mut MaterializeCtx<'_>,
     list: ruby_rbs::node::NodeList<'_>,
 ) -> Result<RArray, Error> {
-    let arr = ctx.ruby.ary_new();
+    let arr = ctx.ruby.ary_new_capa(list.len());
     for p in list.iter() {
         let Node::TypeParam(tp) = &p else {
             unreachable!("type_params list must hold TypeParam nodes only");
