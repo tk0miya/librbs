@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use librbs_core::Environment;
-use librbs_core::discovery::{Loader, Repository};
+use librbs_core::discovery::Loader;
 use librbs_core::env::DeclEntry;
 
 fn class_count(env: &Environment) -> usize {
@@ -42,14 +42,8 @@ fn parses_every_core_file() {
 
 #[test]
 fn loads_core_plus_stdlib() {
-    let mut repo = Repository::default();
-    repo.add(vendor_rbs().join("stdlib"));
-    let mut loader = Loader {
-        core_root: Some(vendor_rbs().join("core")),
-        repository: repo,
-        libs: Vec::new(),
-        dirs: Vec::new(),
-    };
+    let mut loader = Loader::with_core_root(vendor_rbs().join("core"));
+    loader.add_repository_dir(vendor_rbs().join("stdlib"));
     // Add a few well-known stdlib libraries to mirror what RBS does on
     // a default load.
     for name in ["stringio", "json", "pathname"] {

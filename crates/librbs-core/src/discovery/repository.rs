@@ -75,7 +75,7 @@ pub struct VersionPath {
 #[derive(Debug, Default)]
 pub struct GemRBS {
     pub name: String,
-    pub paths: Vec<PathBuf>,
+    paths: Vec<PathBuf>,
     versions: Option<Vec<VersionPath>>,
 }
 
@@ -86,6 +86,11 @@ impl GemRBS {
             paths: Vec::new(),
             versions: None,
         }
+    }
+
+    pub fn add_path(&mut self, path: impl Into<PathBuf>) {
+        self.paths.push(path.into());
+        self.versions = None;
     }
 
     pub fn load(&mut self) {
@@ -178,7 +183,7 @@ impl Repository {
                 .gems
                 .entry(gem_name.clone())
                 .or_insert_with(|| GemRBS::new(gem_name));
-            gem.paths.push(entry.path());
+            gem.add_path(entry.path());
         }
         self.dirs.push(dir);
     }

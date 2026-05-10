@@ -114,22 +114,23 @@ fn read_libs(loader: Value) -> Result<Vec<(String, Option<String>)>, Error> {
     Ok(out)
 }
 
-/// Read `@repository.dirs` and call `Repository::add` on each.
-fn read_repository(loader: Value, repo_out: &mut librbs_core::Repository) -> Result<(), Error> {
+/// Read `@repository.dirs` from the Ruby loader.
+fn read_repository_dirs(loader: Value) -> Result<Vec<PathBuf>, Error> {
     let repo = ivar_get(loader, "@repository")?;
     if repo.is_nil() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let dirs = ivar_get(repo, "@dirs")?;
     if dirs.is_nil() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let arr = RArray::try_convert(dirs)?;
+    let mut out = Vec::with_capacity(arr.len());
     for item in arr.into_iter() {
         let s: String = item.funcall("to_s", ())?;
-        repo_out.add(PathBuf::from(s));
+        out.push(PathBuf::from(s));
     }
-    Ok(())
+    Ok(out)
 }
 
 /// Mirror `RBS::EnvironmentLoader#load`'s stringio injection: when a
@@ -349,12 +350,17 @@ fn build_environment(loader: Value) -> Result<Value, Error> {
     let core_root = read_core_root(loader)?;
     let mut libs = read_libs(loader)?;
     let dirs = read_dirs(loader)?;
+    let repository_dirs = read_repository_dirs(loader)?;
     inject_stringio(core_root.as_ref(), &mut libs);
 
     let mut rust_loader = librbs_core::Loader::new();
-    rust_loader.core_root = core_root;
-    rust_loader.dirs = dirs;
-    read_repository(loader, &mut rust_loader.repository)?;
+    rust_loader.set_core_root(core_root);
+    for dir in dirs {
+        rust_loader.add_dir(dir);
+    }
+    for dir in repository_dirs {
+        rust_loader.add_repository_dir(dir);
+    }
     for (name, version) in libs {
         rust_loader.add_library(name, version);
     }
