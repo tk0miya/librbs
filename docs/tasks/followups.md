@@ -15,151 +15,76 @@ belong in this list.
 
 ## Open
 
-### Reimplement `RBS::Environment` and `RBS::EnvironmentLoader` as Core+Wrapper
+### Complete materialize-trigger coverage on `RBS::Environment`
 
-- **Origin**: M3c review; design firmed up in pre-M4 discussion.
-- **Where**: today — `lib/librbs/patches/environment.rb`,
-  `lib/librbs/patches/environment_loader.rb`, and the magnus
-  bridge in `ext/librbs/src/lib.rs` that reads the loader's ivars
-  to build a Rust `Loader`. End state — pure-Rust
-  `Librbs::EnvironmentCore` / `Librbs::EnvironmentLoaderCore`
-  exposed via magnus, with thin Ruby subclasses
-  `Librbs::Environment` / `Librbs::EnvironmentLoader` rebound onto
-  `RBS::Environment` / `RBS::EnvironmentLoader` by constant
-  reassignment.
-- **What**: The current strategy is *partial patching*: we
-  monkey-patch a few entry points (`from_loader`, soon
-  `resolve_type_names`, `class_decls` and the five sibling decl
-  hashes) on the upstream Ruby classes. This is enough for M3c–M3i
-  to land but it has a structural correctness problem: any
-  upstream method we forget to patch falls through to the original
-  Ruby code, which reads bare ivars (`@sources`, `@class_decls`,
-  ...) that the Rust handle does not populate. Concrete examples
-  in `vendor/rbs/lib/rbs/environment.rb`:
-  - `declarations` → `sources.flat_map(&:declarations)` (L14):
-    with `*_decls` patched but `sources` not, returns `[]` while
-    `class_decls` is fully populated.
-  - `each_rbs_source` / `each_ruby_source` (L470-): empty iterator.
-  - `buffers` → `sources.map(&:buffer)` (L998): empty array.
-  - `inspect` (L993): reads ivar sizes directly, prints
-    `(0 items)`.
-  - `add_source` / `unload`: mutate `@sources` and the decl hashes
-    in pure Ruby; the Rust handle goes out of sync.
-  - `initialize_copy` (L59): dups ivars, drops `@__librbs_handle`.
-  These are silent inconsistencies that surface only as
-  hard-to-diagnose application bugs.
-- **Ideal goal**: `RBS::Environment` and `RBS::EnvironmentLoader`
-  become Ruby subclasses of magnus-wrapped Rust classes. The Rust
-  layer owns all primitive state and exposes just enough accessors
-  for the upstream Ruby derivative methods (`declarations`,
-  `each_decl`, `inspect`, `validate_type_params`, ...) to keep
-  working unchanged on top. We do not need *everything* in Rust —
-  the data layer is Rust, the accessor/iteration/presentation
-  layer stays Ruby.
-- **Architecture**:
-  - `Librbs::EnvironmentCore` (Rust, magnus `TypedData`):
-    - state: `sources`, six decl tables, resolution side-table.
-    - methods: `class_decls` / `interface_decls` /
-      `type_alias_decls` / `constant_decls` / `class_alias_decls`
-      / `global_decls` (lazy materialize), `sources` (lazy
-      materialize), `add_source`, `unload`,
-      `resolve_type_names(only:)`, `class_decl?`,
-      `interface_name?`, and similar fast-path predicates that do
-      not force materialization.
-    - class methods: `from_loader`.
-  - `Librbs::Environment < Librbs::EnvironmentCore` (Ruby):
-    - hosts the derivative methods carried over from
-      `vendor/rbs/lib/rbs/environment.rb`: `declarations`,
-      `each_rbs_source`, `each_ruby_source`, `buffers`,
-      `each_decl`, `each_constant`, `each_global`,
-      `each_type_name`, `inspect` (rewritten to use accessors
-      instead of ivars), `validate_type_params`,
-      `normalize_type_name`, `normalize_module_name`,
-      `class_alias?`, `module_alias?`, `class?`, `module?`,
-      `absolute_type`, `subtract`, etc.
-    - all derivative methods read state through the Rust
-      accessors, so they stay correct as long as the accessors
-      return correct data — no per-method patching required.
-  - `RBS::Environment` rebound:
-    ```ruby
-    Librbs::Environment::ClassEntry       = RBS::Environment::ClassEntry
-    Librbs::Environment::SingleEntry      = RBS::Environment::SingleEntry
-    Librbs::Environment::ModuleAliasEntry = RBS::Environment::ModuleAliasEntry
-    Librbs::Environment::ClassAliasEntry  = RBS::Environment::ClassAliasEntry
-    Librbs::Environment::InterfaceEntry   = RBS::Environment::InterfaceEntry
-    Librbs::Environment::TypeAliasEntry   = RBS::Environment::TypeAliasEntry
-    Librbs::Environment::ConstantEntry    = RBS::Environment::ConstantEntry
-    Librbs::Environment::GlobalEntry      = RBS::Environment::GlobalEntry
-
-    RBS.send(:remove_const, :Environment)
-    RBS::Environment = Librbs::Environment
-    ```
-    Constant reassignment is preferred over `prepend`-style
-    patching because the latter cannot reshape allocator /
-    parent-class relationships. Nested constants must be aliased
-    before the rebind so that `RBS::Environment::ClassEntry` and
-    friends keep resolving for downstream consumers.
-  - The same Core+Wrapper pattern applies to `EnvironmentLoader`,
-    with the additional choice of whether to push loader config
-    (`@core_root`, `@repository`, `@libs`, `@dirs`) into Rust as
-    well. Doing so eliminates the ivar-reading round trip in the
-    magnus bridge and the `inject_stringio` Ruby-side detour, but
-    forces the M2 follow-up "Full `Gem::Version` semantics" to
-    land first because `Repository::lookup` would then run in
-    Rust against real-world version strings. Decision deferred to
-    the kickoff of this followup.
-- **Source materialization granularity**: materialize all sources
-  at once on first access, sharing the lazy boundary with the six
-  decl hashes. Per-Source laziness is rejected for v1: every
-  upstream method that touches `sources` iterates it in full, so
-  the bookkeeping does not pay off. A two-tier split (cheap
-  `Buffer` eager, AST translation lazy per Source) is left as a
-  future optimization if profiling shows it.
-- **Marshal**: not supported. `_dump` raises a clear `TypeError`
-  to prevent silent corruption. Steep, rubocop-rbs, and typeprof
-  do not call `Marshal.dump` on `Environment` (verified during M5
-  investigation). Implementing `_dump` / `_load` against a
-  bumpalo arena and the resolution side-table is a multi-day
-  effort with no current consumer; revisit only if a real consumer
-  surfaces, and at that point the most likely shape is "dump the
-  inputs, replay the pipeline on load" rather than serializing
-  the resolved state.
-- **Required changes** (sketch — order TBD at the kickoff of this
-  followup):
-  - Define `Librbs::EnvironmentCore` in Rust via
-    `magnus::TypedData` with the accessor surface above.
-    Implement `materialize_all!` as a single entry point that
-    builds the six decl Hashes and the `sources` Array.
-  - Port the derivative methods of `RBS::Environment` into
-    `Librbs::Environment`, rewriting any ivar reads as accessor
-    calls (notably `inspect`).
-  - Rebind `RBS::Environment` after aliasing nested constants.
-    Drop `lib/librbs/patches/environment.rb` and the
-    `@__librbs_handle` ivar.
-  - Decide loader scope (full Core or `load`-only). If full Core,
-    land the M2 follow-up "Full `Gem::Version` semantics in
-    `librbs-core`" first, then port loader config and `add` /
-    `add_collection` / repository wiring into Rust. If
-    `load`-only, keep the loader Ruby-resident and only Core-ify
-    the `load` entry point.
-  - Audit downstream consumers (`steep`, `rubocop-rbs`,
-    `typeprof`, ...) for code that depends on:
-    - `RBS::Environment` being a plain Ruby object (ivar reads,
-      `Marshal`, `inspect` format),
-    - `klass.name == "RBS::Environment"` literal comparisons
-      (the rebound class reports `"Librbs::Environment"`),
-    - direct `Class#allocate` calls on `RBS::Environment`.
-    Each hit is a compatibility constraint on the Rust facade.
-  - Add a meta-test that asserts every public instance method of
-    upstream `RBS::Environment` (and `RBS::EnvironmentLoader`)
-    resolves on the rebound class, so that future RBS upstream
-    bumps fail loudly when new methods land.
-- **When**: Not before M4 completion. M3c–M3i finish on the
-  current patch path. Revisit at M4 once benchmarks tell us how
-  much the partial-patch overhead costs and how often the silent
-  inconsistencies surface in practice. The architecture above is
-  the agreed direction whenever this followup is taken on; the
-  open question is timing, not shape.
+- **Origin**: M3c review; reframed post-M4. Originally tracked as
+  "Reimplement `RBS::Environment` and `RBS::EnvironmentLoader` as
+  Core+Wrapper" because the partial-patch strategy was thought to
+  be structurally unsound. M3e's `add_source`-based materialization
+  changed that: once `materialize_all` runs, the upstream ivars
+  (`@sources`, `@class_decls`, ...) are populated bit-for-bit
+  identically to a pure-Ruby load. The remaining work is therefore
+  not a full rewrite — it is closing the trigger coverage on every
+  state-reading method, plus a meta-test that prevents the next
+  upstream bump from silently reopening the gap.
+- **Where**: `lib/librbs/patches/environment.rb` and `test/rbs/`
+  (or `spec/`). The companion work of moving the `from_loader`
+  patch off `RBS::Environment` and onto `RBS::EnvironmentLoader`
+  is in progress separately and is *not* part of this followup.
+- **What**: today the patch covers `class_decls`, `interface_decls`,
+  `type_alias_decls`, `constant_decls`, `class_alias_decls`,
+  `global_decls`, `sources`, `declarations`, `each_rbs_source`,
+  and `each_ruby_source`. Predicates and normalizers
+  (`interface_name?`, `class_decl?`, `normalize_type_name`, ...)
+  route through these accessors and inherit the trigger
+  transitively. Known holes:
+  - **`inspect`** (`vendor/rbs/lib/rbs/environment.rb:993`) reads
+    ivar sizes directly (`@class_decls.size`, ...) and bypasses
+    the patched accessors. `pp env` before any other access
+    prints `(0 items)` for every category.
+  - **`initialize_copy`** (L59) dups the six decl Hashes and
+    `@sources` but drops `@__librbs_handle` and
+    `@__librbs_materialized`. If `dup` runs before any
+    materializing read, the dup permanently sees empty ivars.
+  - **`add_source` / `unload`** mutate the Ruby ivars directly.
+    After `materialize_all` has run this is fine — the Rust
+    handle is never re-read once materialization is complete —
+    but before materialization, the user mutation lands on empty
+    ivars and is overwritten when materialization eventually
+    runs.
+  - **`buffers`** (L998) routes through the patched `sources`
+    method and is therefore safe. Listed here only to record
+    that we audited it.
+- **Required changes**:
+  - Add `inspect` to the `ensure_materialized; super()` list in
+    `lib/librbs/patches/environment.rb`.
+  - Add `initialize_copy` so the source env is materialized
+    before its ivars are dup'd. The `@__librbs_handle` /
+    `@__librbs_materialized` ivars are intentionally not copied
+    — the post-materialize Ruby ivars are the source of truth on
+    the dup.
+  - Add `add_source` / `unload` so each one materializes the
+    existing Rust state before applying the user's mutation. Net
+    effect: the Rust handle becomes write-once / read-once
+    (consumed by the first materialize call), and all subsequent
+    state lives in Ruby ivars.
+  - Add a meta-test that enumerates every public instance method
+    of upstream `RBS::Environment` and asserts each is either
+    (a) explicitly patched in `Librbs::Patches::Environment`, or
+    (b) reads state only through patched accessors (no direct
+    ivar reads, no `instance_variable_get`). A future upstream
+    bump that introduces a new ivar-reading method then fails
+    the meta-test instead of silently shipping a
+    `(0 items)`-style bug.
+- **When**: Now. Independent of the `resolve_type_names`
+  followup below.
+- **Tests**: The meta-test is the primary regression guard. Add
+  targeted unit specs for the specific behaviours: `pp env`
+  reports correct sizes both pre- and post-materialize;
+  `env.dup.class_decls` matches `env.class_decls`;
+  `env.add_source(s)` called before any other access yields an
+  env whose `class_decls` covers both the Rust-side sources and
+  `s`.
 
 ### `resolve_type_names` mutates the source env's shared core state
 
@@ -198,20 +123,30 @@ belong in this list.
   to stay un-resolved will see corrupted-looking state. The failure
   mode is silent — no exception, just diverging behavior between
   "with librbs" and "without librbs".
-- **Required changes** — pick whichever lands first:
-  - Short-term: in `resolve_type_names`, build a *new*
-    `librbs_core::Environment` (cloning the inputs needed for
-    resolution) instead of mutating the existing one in place, and
-    wrap it in a fresh `WrappedEnvironment` for `dst.@__librbs_handle`.
-    The Ruby-visible contract then matches upstream exactly.
-  - Long-term: subsumed by **Reimplement `RBS::Environment` and
-    `RBS::EnvironmentLoader` in Rust** below — once the core env has
-    proper interior mutability (or the resolver returns a value rather
-    than mutating), this hatch closes naturally.
-- **When**: Before any caller starts retaining the pre-resolution env,
-  and re-check at M3e (materialization adds extra Arc clones, which
-  invalidates the "strong count is 1" half of the current safety
-  argument). Whichever comes first.
+- **Required changes**: in `resolve_type_names`, build a *new*
+  `librbs_core::Environment` (cloning the inputs needed for
+  resolution — `sources` plus the interner state the resolver
+  reads) instead of mutating the existing one in place, and wrap
+  it in a fresh `WrappedEnvironment` for `dst.@__librbs_handle`.
+  The Ruby-visible contract then matches upstream exactly:
+  `src.@__librbs_handle.equal?(dst.@__librbs_handle)` becomes
+  `false`, and any state the resolver writes is observable only
+  through `dst`.
+  - This likely needs a `clone` or `fork_for_resolution` entry
+    point on `librbs_core::Environment`. Measure the clone cost
+    against the M4 baseline; if it materially regresses
+    `load_and_resolve`, switch the resolver to a "return a value
+    rather than mutate" shape so the source env can be borrowed
+    immutably throughout.
+  - The current `unsafe` block in `ext/librbs/src/lib.rs`
+    (`&mut *env_ptr` derived from `Arc::as_ptr`) goes away: the
+    function holds an owned new env directly, and the
+    "strong-count-is-1" safety argument is no longer load-bearing.
+- **When**: Now. Independent of the materialize-trigger followup
+  above. The original trigger ("before any caller retains the
+  pre-resolution env, or re-check at M3e") has already lapsed —
+  M3e shipped and the current code still relies on the
+  strong-count-is-1 invariant.
 - **Tests**: Add a spec that calls `resolve_type_names` and then asserts
   the source env still answers as un-resolved (e.g. by snapshotting a
   canonical dump of `src` before and after, or by checking that
