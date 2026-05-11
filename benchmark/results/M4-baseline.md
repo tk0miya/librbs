@@ -1,6 +1,6 @@
 # M4 baseline benchmark
 
-Date: 2026-05-10
+Date: 2026-05-11
 Environment: Ubuntu 24.04 LTS / Ruby 3.3.6 / Linux x86_64 (Intel Xeon @ 2.80GHz, kernel 6.18.5)
 
 Cold-start wall time, minimum of 3 runs per cell. Each (impl, size) pair
@@ -20,34 +20,34 @@ Sizes:
 `from_loader` + materialize (`class_decls.size` triggers
 `Native.materialize_all`).
 
-| size   | pure RBS  | librbs (M3) | speedup |
-|--------|-----------|-------------|---------|
-| small  | 147.0 ms  | 193.6 ms    | 0.76x   |
-| medium | 185.2 ms  | 238.8 ms    | 0.78x   |
-| large  | 1135.7 ms | 1095.0 ms   | 1.04x   |
+| size   | pure RBS  | librbs    | speedup |
+|--------|-----------|-----------|---------|
+| small  | 154.1 ms  | 186.6 ms  | 0.83x   |
+| medium | 186.5 ms  | 197.1 ms  | 0.95x   |
+| large  | 1109.6 ms | 739.8 ms  | 1.50x   |
 
 ## load_and_resolve.rb
 
 `from_loader` + `resolve_type_names` + materialize.
 
-| size   | pure RBS  | librbs (M3) | speedup |
-|--------|-----------|-------------|---------|
-| small  | 336.6 ms  | 209.8 ms    | 1.60x   |
-| medium | 358.2 ms  | 269.7 ms    | 1.33x   |
-| large  | 3360.6 ms | 1075.1 ms   | 3.13x   |
+| size   | pure RBS  | librbs    | speedup |
+|--------|-----------|-----------|---------|
+| small  | 269.5 ms  | 171.6 ms  | 1.57x   |
+| medium | 359.1 ms  | 235.9 ms  | 1.52x   |
+| large  | 2723.9 ms | 725.5 ms  | 3.75x   |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
-| size   | pure RBS  | librbs   |
-|--------|-----------|----------|
-| small  | 189.6 ms  |  16.2 ms |
-| medium | 173.0 ms  |  30.9 ms |
-| large  | 2224.9 ms |  -19.9 ms (≈0, within run-to-run noise) |
+| size   | pure RBS  | librbs    |
+|--------|-----------|-----------|
+| small  | 115.4 ms  | −15.0 ms (≈0, within run-to-run noise) |
+| medium | 172.6 ms  |  38.8 ms  |
+| large  | 1614.3 ms | −14.3 ms (≈0, within run-to-run noise) |
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~190ms (small/medium) to ~2.2s (large) inside `resolve_type_names`,
-so that step alone accounts for 11.5x (large) and ~5.5x (medium) of the
+spends ~115ms (small) to ~1.6s (large) inside `resolve_type_names`, so
+that step alone accounts for ~2.2x (large) and ~1.5x (medium) of the
 gap.
 
 ## Notes captured during the run

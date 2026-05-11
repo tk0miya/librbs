@@ -30,6 +30,9 @@ pub fn materialize_namespace(
     ns_sym: NamespaceSym,
     absolute: bool,
 ) -> Result<Value, Error> {
+    if let Some(cached) = ctx.cached_namespace(ns_sym, absolute) {
+        return Ok(cached);
+    }
     let interner = ctx.interner;
     let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
     let path_array = ctx.ruby.ary_new_capa(path_syms.len());
@@ -37,11 +40,13 @@ pub fn materialize_namespace(
         let seg = interner.symbols().lookup(*s);
         path_array.push(ctx.ruby.to_symbol(seg))?;
     }
-    Ok(ctx
+    let namespace = ctx
         .classes
         .namespace
         .new_instance((kwargs!("path" => path_array, "absolute" => absolute),))?
-        .as_value())
+        .as_value();
+    ctx.cache_namespace(ns_sym, absolute, namespace)?;
+    Ok(namespace)
 }
 
 /// Build `RBS::TypeName` from the AST-interned `raw` symbol exactly as
@@ -89,6 +94,9 @@ fn build_type_name_from_sym(
     sym: TypeNameSym,
     mark_absolute: bool,
 ) -> Result<Value, Error> {
+    if let Some(cached) = ctx.cached_type_name(sym, mark_absolute) {
+        return Ok(cached);
+    }
     let interner = ctx.interner;
     let (ns_sym, name_sym, _kind) = interner.lookup(sym);
     let namespace = materialize_namespace(ctx, ns_sym, mark_absolute)?;
@@ -98,5 +106,6 @@ fn build_type_name_from_sym(
         .type_name
         .new_instance((kwargs!("namespace" => namespace, "name" => leaf),))?
         .as_value();
+    ctx.cache_type_name(sym, mark_absolute, type_name)?;
     Ok(type_name)
 }

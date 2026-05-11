@@ -8,13 +8,13 @@
 //! `materialize_all` cut-over (M3h). The actual per-node materialization
 //! (types, members, decls) lands in M3f / M3g / M3h.
 
-use magnus::{Error, RClass, Ruby, Value, kwargs, prelude::*, value::ReprValue};
+use magnus::{Error, RClass, RHash, Ruby, Value, kwargs, prelude::*, value::ReprValue};
 
 use librbs_core::Environment;
 use librbs_core::Source;
 use librbs_core::env::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
-use librbs_core::interner::FrozenInterner;
+use librbs_core::interner::{FrozenInterner, NamespaceSym, TypeNameSym};
 
 pub mod decl;
 pub mod directive;
@@ -224,6 +224,37 @@ pub struct MaterializeCtx<'a> {
     /// Index into `current_resolutions`, advanced by
     /// [`pull_resolution`].
     cursor: usize,
+    /// Flyweight table for materialised `RBS::Namespace` instances,
+    /// keyed by `(NamespaceSym, absolute?)` packed into a single
+    /// integer (see [`namespace_cache_key`]). Lets every reference to
+    /// the same interned namespace share one Ruby object — stdlib
+    /// materialisation hits common namespaces (`::`, `::RBS::`) tens
+    /// of thousands of times.
+    ///
+    /// Stored as `RHash` (a Ruby object) rather than
+    /// `HashMap<_, Value>` for GC safety: Ruby's collector marks values
+    /// inside the hash via its standard hash-mark routine, while a
+    /// Rust heap container would not be scanned. The `RHash` itself
+    /// stays reachable because `MaterializeCtx` lives on the Rust
+    /// stack of `materialize_all` and Ruby's conservative collector
+    /// scans the C stack for VALUEs.
+    namespace_cache: RHash,
+    /// Flyweight table for materialised `RBS::TypeName` instances,
+    /// keyed by `(TypeNameSym, mark_absolute)` (see
+    /// [`type_name_cache_key`]). The `mark_absolute` bit must be part
+    /// of the key because the same interned `TypeNameSym` can yield
+    /// both an absolute and a relative `RBS::TypeName` depending on
+    /// whether the call site is resolution-aware (resolved →
+    /// `absolute!`) or raw (preserves AST flag).
+    type_name_cache: RHash,
+}
+
+pub(crate) fn namespace_cache_key(ns: NamespaceSym, absolute: bool) -> i64 {
+    ((ns.0 as i64) << 1) | (absolute as i64)
+}
+
+pub(crate) fn type_name_cache_key(tn: TypeNameSym, mark_absolute: bool) -> i64 {
+    ((tn.0 as i64) << 1) | (mark_absolute as i64)
 }
 
 /// Saved cursor state for `MaterializeCtx`. The nested-decl recursion
@@ -256,7 +287,47 @@ impl<'a> MaterializeCtx<'a> {
             current_buffer: None,
             current_resolutions: None,
             cursor: 0,
+            namespace_cache: ruby.hash_new(),
+            type_name_cache: ruby.hash_new(),
         }
+    }
+
+    /// Look up a previously materialised `RBS::Namespace` for the given
+    /// `(NamespaceSym, absolute?)` pair, or `None` if this is the
+    /// first request. The caller is expected to build the namespace on
+    /// miss and call [`cache_namespace`] before returning.
+    pub fn cached_namespace(&self, ns: NamespaceSym, absolute: bool) -> Option<Value> {
+        self.namespace_cache.get(namespace_cache_key(ns, absolute))
+    }
+
+    pub fn cache_namespace(
+        &self,
+        ns: NamespaceSym,
+        absolute: bool,
+        value: Value,
+    ) -> Result<(), Error> {
+        self.namespace_cache
+            .aset(namespace_cache_key(ns, absolute), value)
+    }
+
+    /// Look up a previously materialised `RBS::TypeName` for the given
+    /// `(TypeNameSym, mark_absolute)` pair. The `mark_absolute` flag is
+    /// keyed because the same `TypeNameSym` can appear both as a raw
+    /// AST reference (preserving the AST's absolute flag) and as a
+    /// resolved reference (forced to `absolute!`).
+    pub fn cached_type_name(&self, tn: TypeNameSym, mark_absolute: bool) -> Option<Value> {
+        self.type_name_cache
+            .get(type_name_cache_key(tn, mark_absolute))
+    }
+
+    pub fn cache_type_name(
+        &self,
+        tn: TypeNameSym,
+        mark_absolute: bool,
+        value: Value,
+    ) -> Result<(), Error> {
+        self.type_name_cache
+            .aset(type_name_cache_key(tn, mark_absolute), value)
     }
 
     /// Install `source` as the active source: store its `source_index`
