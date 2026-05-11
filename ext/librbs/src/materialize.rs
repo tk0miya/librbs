@@ -12,7 +12,9 @@ use std::cell::RefCell;
 use std::ffi::c_char;
 use std::os::raw::c_long;
 
-use magnus::{Error, RClass, RHash, Ruby, Value, kwargs, prelude::*, value::Id, value::ReprValue};
+use magnus::{
+    Error, RClass, RHash, RObject, Ruby, Value, kwargs, prelude::*, value::Id, value::ReprValue,
+};
 
 use librbs_core::Environment;
 use librbs_core::Source;
@@ -121,20 +123,50 @@ pub struct CommonSyms {
     pub covariant: Value,
     pub contravariant: Value,
     pub overload: Value,
-    /// Pre-interned `:@location` ivar id. Used by the
-    /// `RBS::Types::Bases::*` fast path
-    /// ([`crate::materialize::type_::bases_only`] /
-    /// [`crate::materialize::type_::any_type`]) to write `@location`
-    /// directly via `obj_alloc` + `ivar_set`, bypassing
-    /// `new_instance(kwargs!(...))`. Stored as a Ruby `Id` (the raw
-    /// `ID` `rb_intern2` returns) rather than a `Symbol` value because
-    /// `rb_ivar_set` consumes an `ID` directly — wrapping it as a
-    /// `Symbol` would force a `rb_sym2id` round-trip at every use.
+    /// Pre-interned ivar ids used by the `obj_alloc + ivar_set` fast
+    /// path. Stored as Ruby `Id`s (the raw `ID` `rb_intern2` returns)
+    /// rather than `Symbol` values because `rb_ivar_set` consumes an
+    /// `ID` directly — wrapping each as a `Symbol` would force a
+    /// `rb_sym2id` round-trip at every use. The set covers every
+    /// `@<field>` written by upstream `initialize` methods on classes
+    /// the materializer fast-allocates (the `RBS::Types::*`,
+    /// `RBS::MethodType`, `RBS::AST::Declarations::*` and
+    /// `RBS::AST::Members::*` families). The `obj_alloc` path is
+    /// only safe where upstream `initialize` is a pure sequence of
+    /// `@x = x` assignments; see the per-class call sites in
+    /// `materialize/type_.rs`, `materialize/method_type.rs`,
+    /// `materialize/decl.rs`, and `materialize/member.rs`.
     pub ivar_location: Id,
-    /// Pre-interned `:@string` ivar id. Only used by
-    /// `RBS::Types::Bases::Any` when `todo: true`, mirroring upstream
-    /// `Bases::Any#initialize` setting `@string = "__todo__"`.
     pub ivar_string: Id,
+    pub ivar_name: Id,
+    pub ivar_literal: Id,
+    pub ivar_args: Id,
+    pub ivar_types: Id,
+    pub ivar_type: Id,
+    pub ivar_block: Id,
+    pub ivar_self_type: Id,
+    pub ivar_return_type: Id,
+    pub ivar_required_positionals: Id,
+    pub ivar_optional_positionals: Id,
+    pub ivar_rest_positionals: Id,
+    pub ivar_trailing_positionals: Id,
+    pub ivar_required_keywords: Id,
+    pub ivar_optional_keywords: Id,
+    pub ivar_rest_keywords: Id,
+    pub ivar_required: Id,
+    pub ivar_type_params: Id,
+    pub ivar_super_class: Id,
+    pub ivar_members: Id,
+    pub ivar_annotations: Id,
+    pub ivar_comment: Id,
+    pub ivar_self_types: Id,
+    pub ivar_new_name: Id,
+    pub ivar_old_name: Id,
+    pub ivar_kind: Id,
+    pub ivar_overloads: Id,
+    pub ivar_overloading: Id,
+    pub ivar_visibility: Id,
+    pub ivar_ivar_name: Id,
 }
 
 impl CommonSyms {
@@ -151,6 +183,35 @@ impl CommonSyms {
             overload: intern_symbol("Overload"),
             ivar_location: ruby.intern("@location"),
             ivar_string: ruby.intern("@string"),
+            ivar_name: ruby.intern("@name"),
+            ivar_literal: ruby.intern("@literal"),
+            ivar_args: ruby.intern("@args"),
+            ivar_types: ruby.intern("@types"),
+            ivar_type: ruby.intern("@type"),
+            ivar_block: ruby.intern("@block"),
+            ivar_self_type: ruby.intern("@self_type"),
+            ivar_return_type: ruby.intern("@return_type"),
+            ivar_required_positionals: ruby.intern("@required_positionals"),
+            ivar_optional_positionals: ruby.intern("@optional_positionals"),
+            ivar_rest_positionals: ruby.intern("@rest_positionals"),
+            ivar_trailing_positionals: ruby.intern("@trailing_positionals"),
+            ivar_required_keywords: ruby.intern("@required_keywords"),
+            ivar_optional_keywords: ruby.intern("@optional_keywords"),
+            ivar_rest_keywords: ruby.intern("@rest_keywords"),
+            ivar_required: ruby.intern("@required"),
+            ivar_type_params: ruby.intern("@type_params"),
+            ivar_super_class: ruby.intern("@super_class"),
+            ivar_members: ruby.intern("@members"),
+            ivar_annotations: ruby.intern("@annotations"),
+            ivar_comment: ruby.intern("@comment"),
+            ivar_self_types: ruby.intern("@self_types"),
+            ivar_new_name: ruby.intern("@new_name"),
+            ivar_old_name: ruby.intern("@old_name"),
+            ivar_kind: ruby.intern("@kind"),
+            ivar_overloads: ruby.intern("@overloads"),
+            ivar_overloading: ruby.intern("@overloading"),
+            ivar_visibility: ruby.intern("@visibility"),
+            ivar_ivar_name: ruby.intern("@ivar_name"),
         }
     }
 }
@@ -176,6 +237,20 @@ pub fn intern_symbol(name: &str) -> Value {
         let id = rb_sys::rb_intern2(name.as_ptr() as *const c_char, name.len() as c_long);
         rb_value_to_value(rb_sys::rb_id2sym(id))
     }
+}
+
+/// Write `value` to `@<id>` on `obj` via the bare `rb_ivar_set` path.
+/// `obj` must come from `RClass::obj_alloc` on one of the
+/// materializer's fast-allocated `RBS::*` classes — every such class
+/// produces a `T_OBJECT`, so the inner `RObject::from_value` typecheck
+/// always succeeds. The win over `new_instance(kwargs!(...))` is the
+/// elimination of the kwargs `Hash` allocation and the `:initialize`
+/// `funcall`; the only remaining work is a single `rb_ivar_set` per
+/// field.
+#[inline]
+pub(crate) fn set_ivar(obj: Value, id: Id, value: Value) -> Result<(), Error> {
+    let robj = RObject::from_value(obj).expect("obj_alloc must yield T_OBJECT");
+    robj.ivar_set(id, value)
 }
 
 /// Reinterpret a raw `rb_sys::VALUE` as `magnus::Value`. The mirror of
@@ -357,13 +432,35 @@ pub struct MaterializeCtx<'a> {
     /// for this access pattern.
     symbol_cache: RefCell<Vec<rb_sys::VALUE>>,
     /// Whether to use the `obj_alloc + ivar_set` fast path that
-    /// bypasses upstream initializers (currently
-    /// `RBS::Types::Bases::*` and `Bases::Any`; new call sites will
-    /// be gated on the same field as they are added). Snapshotted
-    /// from [`fast_alloc_env`] at [`MaterializeCtx::new`] so the hot
-    /// path reads a plain `bool` field instead of an atomic. The env
-    /// var is read exactly once per process — see the function for
-    /// the parsing rules.
+    /// bypasses upstream initializers. Snapshotted from
+    /// [`fast_alloc_env`] at [`MaterializeCtx::new`] so the hot path
+    /// reads a plain `bool` field instead of an atomic. The env var
+    /// is read exactly once per process — see the function for the
+    /// parsing rules.
+    ///
+    /// Currently gates the fast path on every materializer call site
+    /// whose target class's upstream `initialize` is a pure sequence
+    /// of `@x = x` assignments:
+    ///
+    /// - `RBS::Types::Bases::*` (`Bool`, `Void`, `Nil`, `Top`,
+    ///   `Bottom`, `Self`, `Instance`, `Class`) and `Bases::Any`
+    /// - `RBS::Types::Variable`, `Literal`, `ClassInstance`,
+    ///   `Interface`, `Alias`, `ClassSingleton`, `Tuple`, `Union`,
+    ///   `Intersection`, `Optional`, `Proc`, `Function`,
+    ///   `UntypedFunction`, `Function::Param`, `Block`
+    /// - `RBS::MethodType`
+    /// - `RBS::AST::Declarations::Class` / `Module` / `Interface` /
+    ///   `TypeAlias` / `Constant` / `Global` / `ClassAlias` /
+    ///   `ModuleAlias`
+    /// - `RBS::AST::Members::MethodDefinition` / `AttrAccessor` /
+    ///   `AttrReader` / `AttrWriter` / `InstanceVariable` /
+    ///   `ClassInstanceVariable` / `ClassVariable` / `Include` /
+    ///   `Extend` / `Prepend` / `Alias` / `Public` / `Private`
+    ///
+    /// Classes whose upstream `initialize` does post-processing
+    /// (`Types::Record` splits `all_fields` into `@fields` /
+    /// `@optional_fields`) are intentionally excluded — adding them
+    /// would require replicating the post-processing in Rust.
     pub fast_alloc: bool,
 }
 
@@ -371,11 +468,10 @@ pub struct MaterializeCtx<'a> {
 /// path enabled. Values that disable it: `0`, `false`, `off`, `no`
 /// (case-insensitive). Everything else (including unset) keeps it on.
 ///
-/// The flag is intentionally singular even though it currently only
-/// gates the `Types::Bases::*` family — the next waves of bypass
-/// (kwargs-`Hash` elimination for `Types::ClassInstance`,
-/// `MethodType`, `Members::*`, ...) will reuse the same switch so
-/// downstream users have one knob to flip.
+/// One switch gates every fast-path call site so downstream users
+/// have a single knob to flip if upstream RBS ever changes the shape
+/// of an `initialize` we've inlined. See the [`MaterializeCtx::fast_alloc`]
+/// field comment for the full list of classes covered.
 pub fn fast_alloc_env() -> bool {
     static CELL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CELL.get_or_init(|| match std::env::var("LIBRBS_FAST_ALLOC") {

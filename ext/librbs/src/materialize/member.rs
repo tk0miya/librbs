@@ -26,6 +26,7 @@ use crate::materialize::location::{
     add_optional_child, add_required_child, alloc_children, make_location,
 };
 use crate::materialize::method_type::materialize_method_type;
+use crate::materialize::set_ivar;
 use crate::materialize::type_::materialize_type;
 use crate::materialize::type_name::materialize_resolved_type_name;
 
@@ -303,20 +304,38 @@ fn method_definition(
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
 
-    Ok(ctx
-        .classes
-        .members_method_definition
-        .new_instance((kwargs!(
-            "name" => name,
-            "kind" => kind,
-            "overloads" => overloads,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment,
-            "overloading" => node.overloading(),
-            "visibility" => visibility
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let overloading = node.overloading().into_value_with(ctx.ruby);
+        let obj = ctx
+            .classes
+            .members_method_definition
+            .obj_alloc()?
+            .as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_kind, kind)?;
+        set_ivar(obj, ctx.common.ivar_overloads, overloads.as_value())?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        set_ivar(obj, ctx.common.ivar_overloading, overloading)?;
+        set_ivar(obj, ctx.common.ivar_visibility, visibility)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .members_method_definition
+            .new_instance((kwargs!(
+                "name" => name,
+                "kind" => kind,
+                "overloads" => overloads,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment,
+                "overloading" => node.overloading(),
+                "visibility" => visibility
+            ),))?
+            .as_value())
+    }
 }
 
 /// Shared location-builder input for `attr_reader` / `attr_accessor` /
@@ -348,6 +367,51 @@ fn build_attr_location(ctx: &mut MaterializeCtx<'_>, locs: AttrLocations) -> Res
     Ok(loc)
 }
 
+/// Build one of the three `RBS::AST::Members::Attr{Accessor,Reader,Writer}`
+/// instances. All three share the same upstream `initialize` shape
+/// (8 trivial `@x = x` assignments) and the same set of input fields,
+/// so we route them through one body and let the caller pick the
+/// target Ruby class.
+#[allow(clippy::too_many_arguments)]
+fn build_attr_member(
+    ctx: &mut MaterializeCtx<'_>,
+    class: magnus::RClass,
+    name: Value,
+    ty: Value,
+    ivar_name: Value,
+    kind: Value,
+    annotations: RArray,
+    loc: Value,
+    comment: Value,
+    visibility: Value,
+) -> Result<Value, Error> {
+    if ctx.fast_alloc {
+        let obj = class.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_type, ty)?;
+        set_ivar(obj, ctx.common.ivar_ivar_name, ivar_name)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        set_ivar(obj, ctx.common.ivar_kind, kind)?;
+        set_ivar(obj, ctx.common.ivar_visibility, visibility)?;
+        Ok(obj)
+    } else {
+        Ok(class
+            .new_instance((kwargs!(
+                "name" => name,
+                "type" => ty,
+                "ivar_name" => ivar_name,
+                "kind" => kind,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment,
+                "visibility" => visibility
+            ),))?
+            .as_value())
+    }
+}
+
 fn attr_accessor(
     ctx: &mut MaterializeCtx<'_>,
     node: &AttrAccessorNode<'_>,
@@ -372,20 +436,18 @@ fn attr_accessor(
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
     let visibility = attribute_visibility(ctx, node.visibility());
-    Ok(ctx
-        .classes
-        .members_attr_accessor
-        .new_instance((kwargs!(
-            "name" => name,
-            "type" => ty,
-            "ivar_name" => ivar_name,
-            "kind" => kind,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment,
-            "visibility" => visibility
-        ),))?
-        .as_value())
+    build_attr_member(
+        ctx,
+        ctx.classes.members_attr_accessor,
+        name,
+        ty,
+        ivar_name,
+        kind,
+        annotations,
+        loc,
+        comment,
+        visibility,
+    )
 }
 
 fn attr_reader(ctx: &mut MaterializeCtx<'_>, node: &AttrReaderNode<'_>) -> Result<Value, Error> {
@@ -409,20 +471,18 @@ fn attr_reader(ctx: &mut MaterializeCtx<'_>, node: &AttrReaderNode<'_>) -> Resul
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
     let visibility = attribute_visibility(ctx, node.visibility());
-    Ok(ctx
-        .classes
-        .members_attr_reader
-        .new_instance((kwargs!(
-            "name" => name,
-            "type" => ty,
-            "ivar_name" => ivar_name,
-            "kind" => kind,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment,
-            "visibility" => visibility
-        ),))?
-        .as_value())
+    build_attr_member(
+        ctx,
+        ctx.classes.members_attr_reader,
+        name,
+        ty,
+        ivar_name,
+        kind,
+        annotations,
+        loc,
+        comment,
+        visibility,
+    )
 }
 
 fn attr_writer(ctx: &mut MaterializeCtx<'_>, node: &AttrWriterNode<'_>) -> Result<Value, Error> {
@@ -446,20 +506,18 @@ fn attr_writer(ctx: &mut MaterializeCtx<'_>, node: &AttrWriterNode<'_>) -> Resul
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
     let visibility = attribute_visibility(ctx, node.visibility());
-    Ok(ctx
-        .classes
-        .members_attr_writer
-        .new_instance((kwargs!(
-            "name" => name,
-            "type" => ty,
-            "ivar_name" => ivar_name,
-            "kind" => kind,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment,
-            "visibility" => visibility
-        ),))?
-        .as_value())
+    build_attr_member(
+        ctx,
+        ctx.classes.members_attr_writer,
+        name,
+        ty,
+        ivar_name,
+        kind,
+        annotations,
+        loc,
+        comment,
+        visibility,
+    )
 }
 
 fn build_var_location(
@@ -477,6 +535,36 @@ fn build_var_location(
     Ok(loc)
 }
 
+/// Build one of the three `RBS::AST::Members::{,Class}{,Instance}Variable`
+/// instances. The three classes share the same `initialize` shape
+/// (4 trivial `@x = x` assignments).
+fn build_var_member(
+    ctx: &mut MaterializeCtx<'_>,
+    class: magnus::RClass,
+    name: Value,
+    ty: Value,
+    loc: Value,
+    comment: Value,
+) -> Result<Value, Error> {
+    if ctx.fast_alloc {
+        let obj = class.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_type, ty)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(class
+            .new_instance((kwargs!(
+                "name" => name,
+                "type" => ty,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
+}
+
 fn instance_variable(
     ctx: &mut MaterializeCtx<'_>,
     node: &InstanceVariableNode<'_>,
@@ -491,16 +579,14 @@ fn instance_variable(
     let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_instance_variable
-        .new_instance((kwargs!(
-            "name" => name,
-            "type" => ty,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    build_var_member(
+        ctx,
+        ctx.classes.members_instance_variable,
+        name,
+        ty,
+        loc,
+        comment,
+    )
 }
 
 fn class_instance_variable(
@@ -517,16 +603,14 @@ fn class_instance_variable(
     let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_class_instance_variable
-        .new_instance((kwargs!(
-            "name" => name,
-            "type" => ty,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    build_var_member(
+        ctx,
+        ctx.classes.members_class_instance_variable,
+        name,
+        ty,
+        loc,
+        comment,
+    )
 }
 
 fn class_variable(
@@ -543,16 +627,14 @@ fn class_variable(
     let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_class_variable
-        .new_instance((kwargs!(
-            "name" => name,
-            "type" => ty,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    build_var_member(
+        ctx,
+        ctx.classes.members_class_variable,
+        name,
+        ty,
+        loc,
+        comment,
+    )
 }
 
 fn build_mixin_location(
@@ -570,6 +652,39 @@ fn build_mixin_location(
     Ok(loc)
 }
 
+/// Build one of the three `RBS::AST::Members::{Include,Extend,Prepend}`
+/// instances. All three share the same `initialize` shape (5 trivial
+/// `@x = x` assignments).
+fn build_mixin_member(
+    ctx: &mut MaterializeCtx<'_>,
+    class: magnus::RClass,
+    name: Value,
+    args: RArray,
+    annotations: RArray,
+    loc: Value,
+    comment: Value,
+) -> Result<Value, Error> {
+    if ctx.fast_alloc {
+        let obj = class.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_args, args.as_value())?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(class
+            .new_instance((kwargs!(
+                "name" => name,
+                "args" => args,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
+}
+
 fn include_member(ctx: &mut MaterializeCtx<'_>, node: &IncludeNode<'_>) -> Result<Value, Error> {
     let loc = build_mixin_location(
         ctx,
@@ -584,17 +699,15 @@ fn include_member(ctx: &mut MaterializeCtx<'_>, node: &IncludeNode<'_>) -> Resul
     let args = build_args_array(ctx, node.args())?;
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_include
-        .new_instance((kwargs!(
-            "name" => name,
-            "args" => args,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    build_mixin_member(
+        ctx,
+        ctx.classes.members_include,
+        name,
+        args,
+        annotations,
+        loc,
+        comment,
+    )
 }
 
 fn extend_member(ctx: &mut MaterializeCtx<'_>, node: &ExtendNode<'_>) -> Result<Value, Error> {
@@ -611,17 +724,15 @@ fn extend_member(ctx: &mut MaterializeCtx<'_>, node: &ExtendNode<'_>) -> Result<
     let args = build_args_array(ctx, node.args())?;
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_extend
-        .new_instance((kwargs!(
-            "name" => name,
-            "args" => args,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    build_mixin_member(
+        ctx,
+        ctx.classes.members_extend,
+        name,
+        args,
+        annotations,
+        loc,
+        comment,
+    )
 }
 
 fn prepend_member(ctx: &mut MaterializeCtx<'_>, node: &PrependNode<'_>) -> Result<Value, Error> {
@@ -638,17 +749,15 @@ fn prepend_member(ctx: &mut MaterializeCtx<'_>, node: &PrependNode<'_>) -> Resul
     let args = build_args_array(ctx, node.args())?;
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_prepend
-        .new_instance((kwargs!(
-            "name" => name,
-            "args" => args,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    build_mixin_member(
+        ctx,
+        ctx.classes.members_prepend,
+        name,
+        args,
+        annotations,
+        loc,
+        comment,
+    )
 }
 
 fn alias_member(ctx: &mut MaterializeCtx<'_>, node: &AliasNode<'_>) -> Result<Value, Error> {
@@ -665,34 +774,57 @@ fn alias_member(ctx: &mut MaterializeCtx<'_>, node: &AliasNode<'_>) -> Result<Va
     let kind = alias_kind(ctx, node.kind());
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .members_alias
-        .new_instance((kwargs!(
-            "new_name" => new_name,
-            "old_name" => old_name,
-            "kind" => kind,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.members_alias.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_new_name, new_name)?;
+        set_ivar(obj, ctx.common.ivar_old_name, old_name)?;
+        set_ivar(obj, ctx.common.ivar_kind, kind)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .members_alias
+            .new_instance((kwargs!(
+                "new_name" => new_name,
+                "old_name" => old_name,
+                "kind" => kind,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn public_member(ctx: &mut MaterializeCtx<'_>, node: &PublicNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    Ok(ctx
-        .classes
-        .members_public
-        .new_instance((kwargs!("location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.members_public.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .members_public
+            .new_instance((kwargs!("location" => loc),))?
+            .as_value())
+    }
 }
 
 fn private_member(ctx: &mut MaterializeCtx<'_>, node: &PrivateNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    Ok(ctx
-        .classes
-        .members_private
-        .new_instance((kwargs!("location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.members_private.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .members_private
+            .new_instance((kwargs!("location" => loc),))?
+            .as_value())
+    }
 }

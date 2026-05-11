@@ -33,6 +33,7 @@ use crate::materialize::location::{
     add_optional_child, add_required_child, alloc_children, make_location,
 };
 use crate::materialize::member::{build_annotations, build_comment, materialize_member};
+use crate::materialize::set_ivar;
 use crate::materialize::type_::materialize_type;
 use crate::materialize::type_name::{materialize_resolved_type_name, materialize_type_name};
 use crate::materialize::type_param::materialize_type_params;
@@ -163,19 +164,31 @@ fn materialize_class_node(
 
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .decls_class
-        .new_instance((kwargs!(
-            "name" => ruby_name,
-            "type_params" => type_params,
-            "super_class" => super_class,
-            "members" => members,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_class.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, ruby_name)?;
+        set_ivar(obj, ctx.common.ivar_type_params, type_params.as_value())?;
+        set_ivar(obj, ctx.common.ivar_super_class, super_class)?;
+        set_ivar(obj, ctx.common.ivar_members, members.as_value())?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_class
+            .new_instance((kwargs!(
+                "name" => ruby_name,
+                "type_params" => type_params,
+                "super_class" => super_class,
+                "members" => members,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_module_node(
@@ -219,19 +232,31 @@ fn materialize_module_node(
 
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .decls_module
-        .new_instance((kwargs!(
-            "name" => ruby_name,
-            "type_params" => type_params,
-            "members" => members,
-            "self_types" => self_types,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_module.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, ruby_name)?;
+        set_ivar(obj, ctx.common.ivar_type_params, type_params.as_value())?;
+        set_ivar(obj, ctx.common.ivar_self_types, self_types.as_value())?;
+        set_ivar(obj, ctx.common.ivar_members, members.as_value())?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_module
+            .new_instance((kwargs!(
+                "name" => ruby_name,
+                "type_params" => type_params,
+                "members" => members,
+                "self_types" => self_types,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_interface_node(
@@ -257,18 +282,29 @@ fn materialize_interface_node(
 
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .decls_interface
-        .new_instance((kwargs!(
-            "name" => ruby_name,
-            "type_params" => type_params,
-            "members" => members,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_interface.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, ruby_name)?;
+        set_ivar(obj, ctx.common.ivar_type_params, type_params.as_value())?;
+        set_ivar(obj, ctx.common.ivar_members, members.as_value())?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_interface
+            .new_instance((kwargs!(
+                "name" => ruby_name,
+                "type_params" => type_params,
+                "members" => members,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_type_alias_node(
@@ -289,18 +325,29 @@ fn materialize_type_alias_node(
     let ty = materialize_type(ctx, &target_node)?;
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;
-    Ok(ctx
-        .classes
-        .decls_type_alias
-        .new_instance((kwargs!(
-            "name" => ruby_name,
-            "type_params" => type_params,
-            "type" => ty,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_type_alias.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, ruby_name)?;
+        set_ivar(obj, ctx.common.ivar_type_params, type_params.as_value())?;
+        set_ivar(obj, ctx.common.ivar_type, ty)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_type_alias
+            .new_instance((kwargs!(
+                "name" => ruby_name,
+                "type_params" => type_params,
+                "type" => ty,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_constant_node(
@@ -318,17 +365,31 @@ fn materialize_constant_node(
     let ty = materialize_type(ctx, &target_node)?;
     let comment = build_comment(ctx, node.comment())?;
     let annotations = build_annotations(ctx, node.annotations())?;
-    Ok(ctx
-        .classes
-        .decls_constant
-        .new_instance((kwargs!(
-            "name" => ruby_name,
-            "type" => ty,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        // Upstream `Constant#initialize` does `@annotations = annotations || []`.
+        // `build_annotations` always returns a non-nil `RArray` (possibly
+        // empty) so the `|| []` is a no-op for our call site — we can
+        // assign straight through.
+        let obj = ctx.classes.decls_constant.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, ruby_name)?;
+        set_ivar(obj, ctx.common.ivar_type, ty)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_constant
+            .new_instance((kwargs!(
+                "name" => ruby_name,
+                "type" => ty,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_global_node(
@@ -345,17 +406,27 @@ fn materialize_global_node(
     let ty = materialize_type(ctx, &target_node)?;
     let comment = build_comment(ctx, node.comment())?;
     let annotations = build_annotations(ctx, node.annotations())?;
-    Ok(ctx
-        .classes
-        .decls_global
-        .new_instance((kwargs!(
-            "name" => ruby_name,
-            "type" => ty,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_global.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, ruby_name)?;
+        set_ivar(obj, ctx.common.ivar_type, ty)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_global
+            .new_instance((kwargs!(
+                "name" => ruby_name,
+                "type" => ty,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_class_alias_node(
@@ -377,17 +448,27 @@ fn materialize_class_alias_node(
 
     let comment = build_comment(ctx, node.comment())?;
     let annotations = build_annotations(ctx, node.annotations())?;
-    Ok(ctx
-        .classes
-        .decls_class_alias
-        .new_instance((kwargs!(
-            "new_name" => ruby_new_name,
-            "old_name" => old_name_v,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_class_alias.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_new_name, ruby_new_name)?;
+        set_ivar(obj, ctx.common.ivar_old_name, old_name_v)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_class_alias
+            .new_instance((kwargs!(
+                "new_name" => ruby_new_name,
+                "old_name" => old_name_v,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 fn materialize_module_alias_node(
@@ -409,17 +490,27 @@ fn materialize_module_alias_node(
 
     let comment = build_comment(ctx, node.comment())?;
     let annotations = build_annotations(ctx, node.annotations())?;
-    Ok(ctx
-        .classes
-        .decls_module_alias
-        .new_instance((kwargs!(
-            "new_name" => ruby_new_name,
-            "old_name" => old_name_v,
-            "annotations" => annotations,
-            "location" => loc,
-            "comment" => comment
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.decls_module_alias.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_new_name, ruby_new_name)?;
+        set_ivar(obj, ctx.common.ivar_old_name, old_name_v)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_comment, comment)?;
+        set_ivar(obj, ctx.common.ivar_annotations, annotations.as_value())?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .decls_module_alias
+            .new_instance((kwargs!(
+                "new_name" => ruby_new_name,
+                "old_name" => old_name_v,
+                "annotations" => annotations,
+                "location" => loc,
+                "comment" => comment
+            ),))?
+            .as_value())
+    }
 }
 
 /// Materialize a decl that appears as a member of a parent class /
