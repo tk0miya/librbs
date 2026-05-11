@@ -3,7 +3,7 @@
 Date: 2026-05-10
 Environment: Ubuntu 24.04 LTS / Ruby 3.3.6 / Linux x86_64 (Intel Xeon @ 2.80GHz, kernel 6.18.5)
 
-Cold-start wall time, minimum of 3 runs per cell. Each (impl, size) pair
+Cold-start wall time, minimum of 5 runs per cell. Each (impl, size) pair
 runs in its own subprocess (`require "librbs"` patches `RBS::Environment`
 globally — see `benchmark/helpers.rb`).
 
@@ -20,35 +20,53 @@ Sizes:
 `from_loader` + materialize (`class_decls.size` triggers
 `Native.materialize_all`).
 
-| size   | pure RBS  | librbs (M3) | speedup |
-|--------|-----------|-------------|---------|
-| small  | 147.0 ms  | 193.6 ms    | 0.76x   |
-| medium | 185.2 ms  | 238.8 ms    | 0.78x   |
-| large  | 1135.7 ms | 1095.0 ms   | 1.04x   |
+| size   | pure RBS | librbs   | speedup |
+|--------|----------|----------|---------|
+| small  | 146.3 ms | 180.4 ms | 0.81x   |
+| medium | 177.9 ms | 247.3 ms | 0.72x   |
+| large  | 867.2 ms | 891.7 ms | 0.97x   |
 
 ## load_and_resolve.rb
 
 `from_loader` + `resolve_type_names` + materialize.
 
-| size   | pure RBS  | librbs (M3) | speedup |
-|--------|-----------|-------------|---------|
-| small  | 336.6 ms  | 209.8 ms    | 1.60x   |
-| medium | 358.2 ms  | 269.7 ms    | 1.33x   |
-| large  | 3360.6 ms | 1075.1 ms   | 3.13x   |
+| size   | pure RBS  | librbs   | speedup |
+|--------|-----------|----------|---------|
+| small  |  259.6 ms | 184.6 ms | 1.41x   |
+| medium |  382.6 ms | 226.5 ms | 1.69x   |
+| large  | 2448.5 ms | 870.3 ms | 2.81x   |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
-| size   | pure RBS  | librbs   |
-|--------|-----------|----------|
-| small  | 189.6 ms  |  16.2 ms |
-| medium | 173.0 ms  |  30.9 ms |
-| large  | 2224.9 ms |  -19.9 ms (≈0, within run-to-run noise) |
+| size   | pure RBS  | librbs                                |
+|--------|-----------|---------------------------------------|
+| small  |  113.3 ms |   4.2 ms                              |
+| medium |  204.7 ms | −20.8 ms (≈0, within run-to-run noise)|
+| large  | 1581.3 ms | −21.4 ms (≈0, within run-to-run noise)|
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~190ms (small/medium) to ~2.2s (large) inside `resolve_type_names`,
-so that step alone accounts for 11.5x (large) and ~5.5x (medium) of the
-gap.
+spends ~110ms (small) to ~1.6s (large) inside `resolve_type_names`, so
+that step alone accounts for the bulk of the load-and-resolve speedup.
+
+## Materialize-only timing (focused)
+
+Cold-start cells include Ruby boot, parser load, and stdlib require, so
+the materialize improvement is partially hidden by subprocess noise. The
+numbers below come from a single in-process run (`require "rbs"; require
+"librbs"`), 30 timed iterations per cell with `GC.start` before each;
+only the `class_decls.size` call is timed (which triggers
+`Native.materialize_all`). `from_loader` is excluded.
+
+| size   | materialize median |
+|--------|--------------------|
+| small  |  181 ms            |
+| medium |  219 ms            |
+| large  |  931 ms            |
+
+Materialize is still the largest single component of librbs's load-only
+wall time on every size; see the "Pointers" section of
+`M4-decision.md` for the remaining hot spots.
 
 ## Notes captured during the run
 
