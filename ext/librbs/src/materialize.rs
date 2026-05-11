@@ -14,8 +14,9 @@ use librbs_core::Environment;
 use librbs_core::Source;
 use librbs_core::env::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
-use librbs_core::interner::FrozenInterner;
+use librbs_core::interner::{FrozenInterner, Sym};
 
+pub mod cache;
 pub mod decl;
 pub mod directive;
 pub mod location;
@@ -25,6 +26,8 @@ pub mod source;
 pub mod type_;
 pub mod type_name;
 pub mod type_param;
+
+use cache::{CacheFlags, NamespaceCache, PathArrayCache, SymbolCache, TypeNameCache};
 
 /// Pre-resolved Ruby class refs used during materialization. Looking
 /// these up once per [`MaterializeCtx`] avoids per-node `ruby.eval`s on
@@ -224,6 +227,21 @@ pub struct MaterializeCtx<'a> {
     /// Index into `current_resolutions`, advanced by
     /// [`pull_resolution`].
     cursor: usize,
+    /// Per-interner-Sym Ruby `Symbol` Value cache. Populated lazily on
+    /// first lookup via [`Self::ruby_symbol_for`].
+    pub sym_cache: SymbolCache,
+    /// Per-interner-NamespaceSym Ruby `RBS::Namespace` cache, keyed
+    /// `(NamespaceSym, mark_absolute)`. Populated lazily.
+    pub ns_cache: NamespaceCache,
+    /// Per-interner-TypeNameSym Ruby `RBS::TypeName` cache, keyed
+    /// `(TypeNameSym, mark_absolute)`. Populated lazily.
+    pub tn_cache: TypeNameCache,
+    /// Per-interner-NamespaceSym Ruby `Array<Symbol>` cache used as
+    /// the `path:` kwarg for `RBS::Namespace.new`. Populated lazily.
+    pub path_array_cache: PathArrayCache,
+    /// Runtime cache enable flags — toggled via `LIBRBS_CACHE_*` env
+    /// vars by the experiment harness; defaults to all-on.
+    pub cache_flags: CacheFlags,
 }
 
 /// Saved cursor state for `MaterializeCtx`. The nested-decl recursion
@@ -246,17 +264,44 @@ impl<'a> MaterializeCtx<'a> {
         resolution: Option<&'a Resolution>,
         classes: ClassRefs,
     ) -> Self {
+        let frozen = env.interner.frozen();
+        let sym_count = frozen.symbols().len();
+        let ns_count = frozen.namespaces().len();
+        let tn_count = frozen.type_names_len();
         Self {
             ruby,
             env,
-            interner: env.interner.frozen(),
+            interner: frozen,
             resolution,
             source_index: 0,
             classes,
             current_buffer: None,
             current_resolutions: None,
             cursor: 0,
+            sym_cache: SymbolCache::with_capacity(sym_count),
+            ns_cache: NamespaceCache::with_capacity(ns_count),
+            tn_cache: TypeNameCache::with_capacity(tn_count),
+            path_array_cache: PathArrayCache::with_capacity(ns_count),
+            cache_flags: CacheFlags::from_env(),
         }
+    }
+
+    /// Look up (or lazily create + cache) the Ruby `Symbol` Value for
+    /// an interner `Sym`. Replaces `ctx.ruby.to_symbol(interner.symbols().lookup(s))`
+    /// for the materialize hot paths.
+    #[inline]
+    pub fn ruby_symbol_for(&mut self, sym: Sym) -> Value {
+        if self.cache_flags.sym
+            && let Some(v) = self.sym_cache.get(sym)
+        {
+            return v;
+        }
+        let s = self.interner.symbols().lookup(sym);
+        let value = self.ruby.to_symbol(s).as_value();
+        if self.cache_flags.sym {
+            self.sym_cache.insert(sym, value);
+        }
+        value
     }
 
     /// Install `source` as the active source: store its `source_index`

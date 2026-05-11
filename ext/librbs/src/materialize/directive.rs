@@ -132,7 +132,7 @@ fn materialize_use_wildcard_clause(
 /// resolver), and a use directive's reference shape is preserved
 /// verbatim from source either way.
 fn build_directive_type_name(
-    ctx: &MaterializeCtx<'_>,
+    ctx: &mut MaterializeCtx<'_>,
     node: &ruby_rbs::node::TypeNameNode<'_>,
 ) -> Result<Value, Error> {
     let ns_node = node.namespace();
@@ -146,7 +146,7 @@ fn build_directive_type_name(
 }
 
 fn build_namespace_from_node(
-    ctx: &MaterializeCtx<'_>,
+    ctx: &mut MaterializeCtx<'_>,
     ns_node: &ruby_rbs::node::NamespaceNode<'_>,
 ) -> Result<Value, Error> {
     let absolute = ns_node.absolute();

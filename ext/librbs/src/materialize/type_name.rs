@@ -25,30 +25,68 @@ use crate::materialize::MaterializeCtx;
 /// symbol. Shared between `build_type_name_from_sym` and the directive
 /// materialiser (which needs a freestanding `RBS::Namespace` for
 /// `Use::WildcardClause#namespace`).
+///
+/// Results are memoised on the per-run [`MaterializeCtx::ns_cache`] keyed
+/// by `(ns_sym, absolute)` — common namespaces (`::`, `::Foo`, etc.)
+/// appear in many materialised type names but only build their
+/// `RBS::Namespace` Ruby instance once per run. See `cache.rs` for the
+/// safety argument behind keeping the `Value` across calls.
 pub fn materialize_namespace(
-    ctx: &MaterializeCtx<'_>,
+    ctx: &mut MaterializeCtx<'_>,
     ns_sym: NamespaceSym,
     absolute: bool,
 ) -> Result<Value, Error> {
-    let interner = ctx.interner;
-    let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
-    let path_array = ctx.ruby.ary_new_capa(path_syms.len());
-    for s in path_syms {
-        let seg = interner.symbols().lookup(*s);
-        path_array.push(ctx.ruby.to_symbol(seg))?;
+    if ctx.cache_flags.ns
+        && let Some(v) = ctx.ns_cache.get(ns_sym, absolute)
+    {
+        return Ok(v);
     }
-    Ok(ctx
+    let path_array = path_array_for(ctx, ns_sym)?;
+    let value = ctx
         .classes
         .namespace
         .new_instance((kwargs!("path" => path_array, "absolute" => absolute),))?
-        .as_value())
+        .as_value();
+    if ctx.cache_flags.ns {
+        ctx.ns_cache.insert(ns_sym, absolute, value);
+    }
+    Ok(value)
+}
+
+/// Return a Ruby `Array<Symbol>` for the path of `ns_sym`. Cached on
+/// [`MaterializeCtx::path_array_cache`] because the same path is used
+/// for both `absolute=true` and `absolute=false` materialisations and
+/// reappears across every `RBS::Namespace.new` call that shares the
+/// path.
+fn path_array_for(ctx: &mut MaterializeCtx<'_>, ns_sym: NamespaceSym) -> Result<Value, Error> {
+    if ctx.cache_flags.path
+        && let Some(v) = ctx.path_array_cache.get(ns_sym)
+    {
+        return Ok(v);
+    }
+    // Snapshot the path into an owned Vec so we can drop the borrow on
+    // `ctx.interner` before calling `ctx.ruby_symbol_for` (which mutates
+    // `ctx.sym_cache`).
+    let path_syms: Vec<_> = ctx.interner.namespaces().lookup(ns_sym).0.clone();
+    let arr = ctx.ruby.ary_new_capa(path_syms.len());
+    for s in &path_syms {
+        arr.push(ctx.ruby_symbol_for(*s))?;
+    }
+    let arr_value = arr.as_value();
+    if ctx.cache_flags.path {
+        ctx.path_array_cache.insert(ns_sym, arr_value);
+    }
+    Ok(arr_value)
 }
 
 /// Build `RBS::TypeName` from the AST-interned `raw` symbol exactly as
 /// written in the source. The result is marked `absolute!` only when
 /// `raw`'s namespace is itself absolute (i.e. the source wrote
 /// `::Foo`); relative names stay relative.
-pub fn materialize_type_name(ctx: &MaterializeCtx<'_>, raw: TypeNameSym) -> Result<Value, Error> {
+pub fn materialize_type_name(
+    ctx: &mut MaterializeCtx<'_>,
+    raw: TypeNameSym,
+) -> Result<Value, Error> {
     let namespace_is_absolute = ctx
         .interner
         .namespaces()
@@ -85,18 +123,25 @@ pub fn materialize_resolved_type_name(
 }
 
 fn build_type_name_from_sym(
-    ctx: &MaterializeCtx<'_>,
+    ctx: &mut MaterializeCtx<'_>,
     sym: TypeNameSym,
     mark_absolute: bool,
 ) -> Result<Value, Error> {
-    let interner = ctx.interner;
-    let (ns_sym, name_sym, _kind) = interner.lookup(sym);
+    if ctx.cache_flags.tn
+        && let Some(v) = ctx.tn_cache.get(sym, mark_absolute)
+    {
+        return Ok(v);
+    }
+    let (ns_sym, name_sym, _kind) = ctx.interner.lookup(sym);
     let namespace = materialize_namespace(ctx, ns_sym, mark_absolute)?;
-    let leaf = ctx.ruby.to_symbol(interner.symbols().lookup(name_sym));
+    let leaf = ctx.ruby_symbol_for(name_sym);
     let type_name: Value = ctx
         .classes
         .type_name
         .new_instance((kwargs!("namespace" => namespace, "name" => leaf),))?
         .as_value();
+    if ctx.cache_flags.tn {
+        ctx.tn_cache.insert(sym, mark_absolute, type_name);
+    }
     Ok(type_name)
 }

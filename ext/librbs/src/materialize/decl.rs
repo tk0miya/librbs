@@ -536,7 +536,7 @@ fn full_decl_name(
 ///   resolution side-table reproduces that rewrite by using
 ///   `full_name` directly.
 fn decl_self_name(
-    ctx: &MaterializeCtx<'_>,
+    ctx: &mut MaterializeCtx<'_>,
     name_node: &ruby_rbs::node::TypeNameNode<'_>,
     full_name: TypeNameSym,
 ) -> Result<Value, Error> {

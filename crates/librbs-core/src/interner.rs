@@ -83,6 +83,10 @@ pub struct NamespaceInterner {
 }
 
 impl NamespaceInterner {
+    pub fn len(&self) -> usize {
+        self.rev.len()
+    }
+
     pub fn new() -> Self {
         let mut this = Self::default();
         // index 0 = relative empty
@@ -263,6 +267,14 @@ impl TypeNameInterner {
         self.rev[tn.0 as usize]
     }
 
+    pub fn len(&self) -> usize {
+        self.rev.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rev.is_empty()
+    }
+
     pub fn name_of(&self, tn: TypeNameSym) -> Sym {
         self.lookup(tn).1
     }
@@ -385,6 +397,10 @@ impl<'a> FrozenInterner<'a> {
     pub fn to_string(&self, tn: TypeNameSym) -> String {
         self.inner.to_string(tn)
     }
+
+    pub fn type_names_len(&self) -> usize {
+        self.inner.len()
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -431,6 +447,10 @@ impl<'a> FrozenNamespaces<'a> {
     pub fn is_relative(&self, ns: NamespaceSym) -> bool {
         self.0.is_relative(ns)
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -443,6 +463,10 @@ impl<'a> FrozenSymbols<'a> {
 
     pub fn lookup(&self, sym: Sym) -> &'a str {
         self.0.lookup(sym)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
