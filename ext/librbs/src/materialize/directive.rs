@@ -271,13 +271,17 @@ fn match_magic_comment(content: &str) -> Option<MagicMatch> {
     // `RBSLocationRange::start_char`/`end_char`), so we count chars.
     let char_idx_of = |byte_idx: usize| content[..byte_idx].chars().count();
 
+    // Ruby's `\s` character class: space, tab, LF, CR, vertical tab,
+    // form feed. The upstream regex uses `\s`, so match the same set
+    // here for parity (`vendor/rbs/lib/rbs/parser_aux.rb:51`).
+    const WS: [char; 6] = [' ', '\t', '\n', '\r', '\x0b', '\x0c'];
+
     // \A#
     let rest = content.strip_prefix('#')?;
     let mut byte = 1;
 
-    // \s* (space/tab only — upstream regex uses \s but the line is a
-    // single line, so \n cannot appear inside a leading-comment match).
-    let trimmed = rest.trim_start_matches([' ', '\t']);
+    // \s*
+    let trimmed = rest.trim_start_matches(WS);
     byte += rest.len() - trimmed.len();
 
     // resolve-type-names
@@ -287,7 +291,7 @@ fn match_magic_comment(content: &str) -> Option<MagicMatch> {
     let keyword_end = byte;
 
     // \s*
-    let trimmed2 = after_kw.trim_start_matches([' ', '\t']);
+    let trimmed2 = after_kw.trim_start_matches(WS);
     byte += after_kw.len() - trimmed2.len();
 
     // :
@@ -297,7 +301,7 @@ fn match_magic_comment(content: &str) -> Option<MagicMatch> {
     let colon_end = byte;
 
     // \s+ — at least one whitespace required.
-    let trimmed3 = after_colon.trim_start_matches([' ', '\t']);
+    let trimmed3 = after_colon.trim_start_matches(WS);
     if trimmed3.len() == after_colon.len() {
         return None;
     }

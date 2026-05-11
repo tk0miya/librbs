@@ -240,25 +240,30 @@ fn decl_matches_only(
 /// upstream pattern position-by-position, with the same anchoring
 /// semantics (only the absolute first line is considered).
 fn is_type_name_resolution_disabled(content: &str) -> bool {
+    // Ruby's `\s` character class. `content.lines().next()` strips
+    // `\n` / `\r` already, but the inner positions can still carry
+    // vertical-tab / form-feed, so match the full upstream class.
+    const WS: [char; 6] = [' ', '\t', '\n', '\r', '\x0b', '\x0c'];
+
     let first_line = content.lines().next().unwrap_or("");
     // \A#
     let Some(s) = first_line.strip_prefix('#') else {
         return false;
     };
     // \s*
-    let s = s.trim_start_matches([' ', '\t']);
+    let s = s.trim_start_matches(WS);
     // resolve-type-names
     let Some(s) = s.strip_prefix("resolve-type-names") else {
         return false;
     };
     // \s*
-    let s = s.trim_start_matches([' ', '\t']);
+    let s = s.trim_start_matches(WS);
     // :
     let Some(s) = s.strip_prefix(':') else {
         return false;
     };
     // \s+ — at least one whitespace required; reject `:false` form.
-    let after_ws = s.trim_start_matches([' ', '\t']);
+    let after_ws = s.trim_start_matches(WS);
     if after_ws.len() == s.len() {
         return false;
     }
