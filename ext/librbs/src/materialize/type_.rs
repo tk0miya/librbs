@@ -10,9 +10,7 @@
 //! [`MaterializeCtx`] via [`materialize_resolved_type_name`] in the
 //! same pre-order the driver pushes them.
 
-use magnus::{
-    Error, IntoValue, RArray, RObject, Value, kwargs, prelude::*, value::Id, value::ReprValue,
-};
+use magnus::{Error, IntoValue, RArray, Value, kwargs, prelude::*, value::ReprValue};
 
 use librbs_core::env::insert::find_type_name_node;
 use ruby_rbs::node::{
@@ -26,6 +24,7 @@ use crate::materialize::location::{
     add_optional_child, add_required_child, alloc_children, make_location,
 };
 use crate::materialize::method_type::materialize_block;
+use crate::materialize::set_ivar;
 use crate::materialize::type_name::materialize_resolved_type_name;
 
 /// Dispatch a `Node` representing an `RBS::Types::*` variant into the
@@ -122,20 +121,6 @@ pub fn materialize_type(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result
     }
 }
 
-/// Set `@<id>` on `obj` via the magnus `Object::ivar_set` path, with
-/// the ivar id pre-interned once on [`crate::materialize::CommonSyms`].
-/// The win over the `new_instance(kwargs!(...))` path is that we skip
-/// the per-call kwargs Hash allocation and the `:initialize` funcall —
-/// the only remaining work is a single `rb_ivar_set`.
-#[inline]
-fn set_ivar(obj: Value, id: Id, value: Value) -> Result<(), Error> {
-    // `obj_alloc` always produces a `T_OBJECT` for `RBS::Types::Bases::*`,
-    // so the cheap typecheck inside `RObject::from_value` succeeds and we
-    // can call `Object::ivar_set` without re-dispatching through `funcall`.
-    let robj = RObject::from_value(obj).expect("obj_alloc must yield T_OBJECT");
-    robj.ivar_set(id, value)
-}
-
 /// Fast-path `RBS::Types::Bases::*` constructor: skip
 /// `new_instance(kwargs!(...))` and write `@location` straight onto a
 /// freshly-allocated instance.
@@ -200,11 +185,18 @@ fn variable_type(
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     let name = ctx.symbol_for_str(node.name().as_str());
-    Ok(ctx
-        .classes
-        .types_variable
-        .new_instance((kwargs!("name" => name, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_variable.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_variable
+            .new_instance((kwargs!("name" => name, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn literal_type(ctx: &mut MaterializeCtx<'_>, node: &LiteralTypeNode<'_>) -> Result<Value, Error> {
@@ -234,11 +226,18 @@ fn literal_type(ctx: &mut MaterializeCtx<'_>, node: &LiteralTypeNode<'_>) -> Res
         // Other literal-child types are not reachable from RBS source.
         _ => unreachable!("RBS::Types::Literal child must be Integer/String/Symbol/Bool"),
     };
-    Ok(ctx
-        .classes
-        .types_literal
-        .new_instance((kwargs!("literal" => literal, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_literal.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_literal, literal)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_literal
+            .new_instance((kwargs!("literal" => literal, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn name_args_location(
@@ -278,11 +277,19 @@ fn class_instance_type(
     let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     let args = build_args_array(ctx, node.args())?;
-    Ok(ctx
-        .classes
-        .types_class_instance
-        .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_class_instance.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_args, args.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_class_instance
+            .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn interface_type(
@@ -298,11 +305,19 @@ fn interface_type(
     let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     let args = build_args_array(ctx, node.args())?;
-    Ok(ctx
-        .classes
-        .types_interface
-        .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_interface.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_args, args.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_interface
+            .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn alias_type(ctx: &mut MaterializeCtx<'_>, node: &AliasTypeNode<'_>) -> Result<Value, Error> {
@@ -315,11 +330,19 @@ fn alias_type(ctx: &mut MaterializeCtx<'_>, node: &AliasTypeNode<'_>) -> Result<
     let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
     let args = build_args_array(ctx, node.args())?;
-    Ok(ctx
-        .classes
-        .types_alias
-        .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_alias.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_args, args.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_alias
+            .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn class_singleton_type(
@@ -339,11 +362,19 @@ fn class_singleton_type(
     // — keep the kwarg shape identical so canonical-dump compares
     // byte-for-byte.
     let args = build_args_array(ctx, node.args())?;
-    Ok(ctx
-        .classes
-        .types_class_singleton
-        .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_class_singleton.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_args, args.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_class_singleton
+            .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn types_array(
@@ -360,21 +391,35 @@ fn types_array(
 fn tuple_type(ctx: &mut MaterializeCtx<'_>, node: &TupleTypeNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     let types = types_array(ctx, node.types())?;
-    Ok(ctx
-        .classes
-        .types_tuple
-        .new_instance((kwargs!("types" => types, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_tuple.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_types, types.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_tuple
+            .new_instance((kwargs!("types" => types, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn union_type(ctx: &mut MaterializeCtx<'_>, node: &UnionTypeNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     let types = types_array(ctx, node.types())?;
-    Ok(ctx
-        .classes
-        .types_union
-        .new_instance((kwargs!("types" => types, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_union.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_types, types.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_union
+            .new_instance((kwargs!("types" => types, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn intersection_type(
@@ -383,11 +428,18 @@ fn intersection_type(
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     let types = types_array(ctx, node.types())?;
-    Ok(ctx
-        .classes
-        .types_intersection
-        .new_instance((kwargs!("types" => types, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_intersection.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_types, types.as_value())?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_intersection
+            .new_instance((kwargs!("types" => types, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn record_type(ctx: &mut MaterializeCtx<'_>, node: &RecordTypeNode<'_>) -> Result<Value, Error> {
@@ -423,11 +475,18 @@ fn optional_type(
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
     let inner = materialize_type(ctx, &node.type_())?;
-    Ok(ctx
-        .classes
-        .types_optional
-        .new_instance((kwargs!("type" => inner, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_optional.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_type, inner)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_optional
+            .new_instance((kwargs!("type" => inner, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn proc_type(ctx: &mut MaterializeCtx<'_>, node: &ProcTypeNode<'_>) -> Result<Value, Error> {
@@ -441,16 +500,25 @@ fn proc_type(ctx: &mut MaterializeCtx<'_>, node: &ProcTypeNode<'_>) -> Result<Va
         Some(t) => materialize_type(ctx, &t)?,
         None => ctx.ruby.qnil().as_value(),
     };
-    Ok(ctx
-        .classes
-        .types_proc
-        .new_instance((kwargs!(
-            "type" => func,
-            "block" => block,
-            "self_type" => self_type,
-            "location" => loc
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_proc.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_type, func)?;
+        set_ivar(obj, ctx.common.ivar_block, block)?;
+        set_ivar(obj, ctx.common.ivar_self_type, self_type)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_proc
+            .new_instance((kwargs!(
+                "type" => func,
+                "block" => block,
+                "self_type" => self_type,
+                "location" => loc
+            ),))?
+            .as_value())
+    }
 }
 
 fn function_param(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result<Value, Error> {
@@ -464,11 +532,19 @@ fn function_param(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result<Value
         Some(sym) => ctx.symbol_for_str(sym.as_str()),
         None => ctx.ruby.qnil().as_value(),
     };
-    Ok(ctx
-        .classes
-        .types_function_param
-        .new_instance((kwargs!("type" => ty, "name" => name, "location" => loc),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_function_param.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_type, ty)?;
+        set_ivar(obj, ctx.common.ivar_name, name)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_function_param
+            .new_instance((kwargs!("type" => ty, "name" => name, "location" => loc),))?
+            .as_value())
+    }
 }
 
 fn function_type(
@@ -515,20 +591,57 @@ fn function_type(
         None => ctx.ruby.qnil().as_value(),
     };
     let return_type = materialize_type(ctx, &node.return_type())?;
-    Ok(ctx
-        .classes
-        .types_function
-        .new_instance((kwargs!(
-            "required_positionals" => required_positionals,
-            "optional_positionals" => optional_positionals,
-            "rest_positionals" => rest_positionals,
-            "trailing_positionals" => trailing_positionals,
-            "required_keywords" => required_keywords,
-            "optional_keywords" => optional_keywords,
-            "rest_keywords" => rest_keywords,
-            "return_type" => return_type
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_function.obj_alloc()?.as_value();
+        // Upstream `Function#initialize` assigns `@return_type` first
+        // (see `vendor/rbs/lib/rbs/types.rb`); preserve the same ivar
+        // write order so `ObjectSpace#each_object`-driven diagnostics
+        // see the same shape as the kwargs path.
+        set_ivar(obj, ctx.common.ivar_return_type, return_type)?;
+        set_ivar(
+            obj,
+            ctx.common.ivar_required_positionals,
+            required_positionals.as_value(),
+        )?;
+        set_ivar(
+            obj,
+            ctx.common.ivar_optional_positionals,
+            optional_positionals.as_value(),
+        )?;
+        set_ivar(obj, ctx.common.ivar_rest_positionals, rest_positionals)?;
+        set_ivar(
+            obj,
+            ctx.common.ivar_trailing_positionals,
+            trailing_positionals.as_value(),
+        )?;
+        set_ivar(
+            obj,
+            ctx.common.ivar_required_keywords,
+            required_keywords.as_value(),
+        )?;
+        set_ivar(
+            obj,
+            ctx.common.ivar_optional_keywords,
+            optional_keywords.as_value(),
+        )?;
+        set_ivar(obj, ctx.common.ivar_rest_keywords, rest_keywords)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_function
+            .new_instance((kwargs!(
+                "required_positionals" => required_positionals,
+                "optional_positionals" => optional_positionals,
+                "rest_positionals" => rest_positionals,
+                "trailing_positionals" => trailing_positionals,
+                "required_keywords" => required_keywords,
+                "optional_keywords" => optional_keywords,
+                "rest_keywords" => rest_keywords,
+                "return_type" => return_type
+            ),))?
+            .as_value())
+    }
 }
 
 fn untyped_function_type(
@@ -536,9 +649,15 @@ fn untyped_function_type(
     node: &UntypedFunctionTypeNode<'_>,
 ) -> Result<Value, Error> {
     let return_type = materialize_type(ctx, &node.return_type())?;
-    Ok(ctx
-        .classes
-        .types_untyped_function
-        .new_instance((kwargs!("return_type" => return_type),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_untyped_function.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_return_type, return_type)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_untyped_function
+            .new_instance((kwargs!("return_type" => return_type),))?
+            .as_value())
+    }
 }

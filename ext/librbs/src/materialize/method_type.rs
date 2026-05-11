@@ -6,7 +6,7 @@
 //! type's `block_type` builder already calls into this helper for the
 //! second consumer.
 
-use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
+use magnus::{Error, IntoValue, Value, kwargs, prelude::*, value::ReprValue};
 
 use ruby_rbs::node::{BlockTypeNode, MethodTypeNode};
 
@@ -14,6 +14,7 @@ use crate::materialize::MaterializeCtx;
 use crate::materialize::location::{
     add_optional_child, add_required_child, alloc_children, make_location,
 };
+use crate::materialize::set_ivar;
 use crate::materialize::type_::materialize_type;
 use crate::materialize::type_param::materialize_type_params;
 
@@ -47,16 +48,25 @@ pub fn materialize_method_type(
         None => ctx.ruby.qnil().as_value(),
     };
 
-    Ok(ctx
-        .classes
-        .method_type
-        .new_instance((kwargs!(
-            "type_params" => type_params,
-            "type" => func,
-            "block" => block,
-            "location" => loc
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        let obj = ctx.classes.method_type.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_type_params, type_params.as_value())?;
+        set_ivar(obj, ctx.common.ivar_type, func)?;
+        set_ivar(obj, ctx.common.ivar_block, block)?;
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .method_type
+            .new_instance((kwargs!(
+                "type_params" => type_params,
+                "type" => func,
+                "block" => block,
+                "location" => loc
+            ),))?
+            .as_value())
+    }
 }
 
 /// Build `RBS::Types::Block.new(type:, required:, self_type:)`. Used by
@@ -72,14 +82,29 @@ pub fn materialize_block(
         Some(t) => materialize_type(ctx, &t)?,
         None => ctx.ruby.qnil().as_value(),
     };
-    Ok(ctx
-        .classes
-        .types_block
-        .new_instance((kwargs!(
-            "type" => func,
-            "required" => node.required(),
-            "self_type" => self_type,
-            "location" => loc
-        ),))?
-        .as_value())
+    if ctx.fast_alloc {
+        // Upstream `Types::Block#initialize` normalizes `required` via
+        // `required ? true : false`. We always pass a Rust `bool` (which
+        // can only be `true` or `false`), so the conversion is an
+        // identity — passing the resulting Ruby `true` / `false`
+        // `Value` straight to `@required` matches both branches.
+        let required = node.required().into_value_with(ctx.ruby);
+        let obj = ctx.classes.types_block.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        set_ivar(obj, ctx.common.ivar_type, func)?;
+        set_ivar(obj, ctx.common.ivar_required, required)?;
+        set_ivar(obj, ctx.common.ivar_self_type, self_type)?;
+        Ok(obj)
+    } else {
+        Ok(ctx
+            .classes
+            .types_block
+            .new_instance((kwargs!(
+                "type" => func,
+                "required" => node.required(),
+                "self_type" => self_type,
+                "location" => loc
+            ),))?
+            .as_value())
+    }
 }
