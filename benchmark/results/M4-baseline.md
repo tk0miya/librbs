@@ -22,9 +22,9 @@ Sizes:
 
 | size   | pure RBS | librbs   | speedup |
 |--------|----------|----------|---------|
-| small  | 114.1 ms | 110.9 ms | 1.03x   |
-| medium | 152.7 ms | 125.1 ms | 1.22x   |
-| large  | 772.5 ms | 503.4 ms | 1.53x   |
+| small  | 125.5 ms | 118.9 ms | 1.05x   |
+| medium | 150.3 ms | 151.2 ms | 0.99x   |
+| large  | 860.2 ms | 529.2 ms | 1.63x   |
 
 ## load_and_resolve.rb
 
@@ -32,17 +32,17 @@ Sizes:
 
 | size   | pure RBS  | librbs   | speedup |
 |--------|-----------|----------|---------|
-| small  |  218.6 ms | 119.7 ms | 1.83x   |
-| medium |  292.6 ms | 145.9 ms | 2.00x   |
-| large  | 1999.6 ms | 469.5 ms | 4.26x   |
+| small  |  244.3 ms | 123.1 ms | 1.98x   |
+| medium |  292.5 ms | 151.1 ms | 1.94x   |
+| large  | 2365.8 ms | 571.0 ms | 4.14x   |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
-| size   | pure RBS  | librbs                                 |
-|--------|-----------|----------------------------------------|
-| small  |  104.5 ms |   8.8 ms                               |
-| medium |  139.9 ms |  20.8 ms                               |
-| large  | 1227.1 ms | −33.9 ms (≈0, within run-to-run noise) |
+| size   | pure RBS  | librbs                                |
+|--------|-----------|---------------------------------------|
+| small  |  118.8 ms |   4.2 ms                              |
+| medium |  142.2 ms |  −0.1 ms (≈0, within run-to-run noise)|
+| large  | 1505.6 ms |  41.8 ms                              |
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
@@ -79,6 +79,18 @@ that step alone accounts for the bulk of the resolve-path gap.
     `rb_check_typeddata` re-lookup, `rb_sym2id`, `NUM2INT`, and the
     Symbol allocation that the underscore-prefixed Ruby primitives
     would otherwise perform on every child append.
+  - `RBS::Location` instances themselves (≈91k for the `large` corpus)
+    are constructed via the same dlsym bridge into upstream's
+    `rbs_new_location2(VALUE buffer, int start_char, int end_char)`,
+    which calls `TypedData_Make_Struct` + `rbs_loc_init` directly. That
+    skips the `RBS::Location.new` → `class_alloc` → `initialize`
+    funcall pair, the `rbs_check_location` re-lookup that
+    `location_initialize` does, and the two `FIX2INT` round-trips on
+    `start` / `end` (we already have them as `i32`s out of the parser).
+    On a same-machine A/B (best of 8 cold runs each) `large` load_only
+    moved from 631.2 ms → 572.3 ms (−9%) with no measurable change on
+    `small` / `medium` — the per-call savings only surface above the
+    noise floor on workloads with enough Location allocations.
   - Static Ruby `Symbol` values used by the materializer (kind /
     visibility / variance keywords, the `Overload` const-get key) are
     pre-interned once on `MaterializeCtx::common`, and interner-backed
