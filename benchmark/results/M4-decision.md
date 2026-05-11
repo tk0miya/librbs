@@ -6,32 +6,34 @@ Date: 2026-05-11
 
 | script                | small | medium | large |
 |-----------------------|-------|--------|-------|
-| `load_only.rb`        | 0.83x | 0.95x  | 1.50x |
-| `load_and_resolve.rb` | 1.57x | 1.52x  | 3.75x |
+| `load_only.rb`        | 0.96x | 1.00x  | 1.49x |
+| `load_and_resolve.rb` | 1.70x | 2.08x  | 3.85x |
 
 Resolve cost in librbs is essentially zero on every size; pure RBS
-spends ~115ms (small) to ~1.6s (large) inside `resolve_type_names`. The
+spends ~100ms (small) to ~1.1s (large) inside `resolve_type_names`. The
 M3d resolver port is unambiguously paying off.
 
-The load-only path sits at 0.83x / 0.95x / 1.50x. `large` is a clear
-win for librbs; `medium` is essentially even with pure RBS; `small`
-still tracks pure RBS because its fixed parser+loader cost dominates.
+The load-only path now sits at 0.96x / 1.00x / 1.49x after the
+post-baseline materialiser tuning (`TypeName` / `Namespace` flyweighting
+plus the `RBS::Location` children FFI fast path documented in
+`M4-baseline.md`). `large` is a clear win for librbs; `medium` has
+caught up to pure RBS; `small` is within noise of pure RBS, with its
+remaining gap dominated by fixed parser+loader cost rather than the
+materialiser.
 
 ## Mapping to the M4 decision flow
 
 The flow in `docs/tasks/milestones/M4-decision-point.md` (Task §4) reads:
 
 - `load_and_resolve >= 2x AND load_only >= 2x` → M4b. **Not matched** —
-  `large` is closest (3.75x and 1.50x) but `load_only` does not clear
+  `large` is closest (3.85x and 1.49x) but `load_only` does not clear
   2x.
-- `load_and_resolve >= 3x AND load_only < 1.5x` → M4a. **Not matched
-  cleanly**: `load_only` sits at the 1.5x boundary on `large`, so the
-  signal (materialize is a ceiling) is weaker than a clean M4a match.
+- `load_and_resolve >= 3x AND load_only < 1.5x` → M4a. **Matched on
+  large** (3.85x and 1.49x). Materialize is the remaining ceiling on
+  the load-only side, although the ceiling is narrower than at the
+  original M4 baseline.
 - `load_and_resolve < 1.5x` → re-investigate M3. **Not matched** —
-  `medium` reads 1.52x.
-
-The headline workload (`large`) points at materialize still being the
-remaining ceiling on the load-only side, but the ceiling is modest.
+  `medium` reads 2.08x.
 
 ## Decision: defer implementation; record baseline only
 
@@ -69,9 +71,10 @@ milestone. Reasoning:
   the six decl hashes and `sources` Array (see followups.md §"Source
   materialization granularity"). That gives the M4a benefit "for free"
   on the new architecture.
-- The `medium` load_only number (0.95x) is the soft spot to watch. If,
-  after Core+Wrapper, medium still does not clear pure RBS, profile the
-  load-only path further — the resolve phase is already saturated.
+- The `small` load_only number (0.96x) is within noise of pure RBS. The
+  parser+loader fixed cost dominates at that size, so further wins
+  there will likely come from Core+Wrapper's lazier materialisation
+  rather than from more local materialiser tuning.
 - If the Core+Wrapper rebuild slips, revisit this decision and implement
   M4a as a stopgap. The materialize.rs surface (~2.5kLoC across nine
   files) is large but the design in M4 §5 is unchanged.

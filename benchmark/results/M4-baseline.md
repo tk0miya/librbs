@@ -20,35 +20,34 @@ Sizes:
 `from_loader` + materialize (`class_decls.size` triggers
 `Native.materialize_all`).
 
-| size   | pure RBS  | librbs    | speedup |
-|--------|-----------|-----------|---------|
-| small  | 154.1 ms  | 186.6 ms  | 0.83x   |
-| medium | 186.5 ms  | 197.1 ms  | 0.95x   |
-| large  | 1109.6 ms | 739.8 ms  | 1.50x   |
+| size   | pure RBS | librbs   | speedup |
+|--------|----------|----------|---------|
+| small  | 111.4 ms | 116.0 ms | 0.96x   |
+| medium | 142.5 ms | 142.2 ms | 1.00x   |
+| large  | 725.3 ms | 486.0 ms | 1.49x   |
 
 ## load_and_resolve.rb
 
 `from_loader` + `resolve_type_names` + materialize.
 
-| size   | pure RBS  | librbs    | speedup |
-|--------|-----------|-----------|---------|
-| small  | 269.5 ms  | 171.6 ms  | 1.57x   |
-| medium | 359.1 ms  | 235.9 ms  | 1.52x   |
-| large  | 2723.9 ms | 725.5 ms  | 3.75x   |
+| size   | pure RBS  | librbs   | speedup |
+|--------|-----------|----------|---------|
+| small  | 208.0 ms  | 122.4 ms | 1.70x   |
+| medium | 276.7 ms  | 132.9 ms | 2.08x   |
+| large  | 1833.1 ms | 476.4 ms | 3.85x   |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
-| size   | pure RBS  | librbs    |
-|--------|-----------|-----------|
-| small  | 115.4 ms  | −15.0 ms (≈0, within run-to-run noise) |
-| medium | 172.6 ms  |  38.8 ms  |
-| large  | 1614.3 ms | −14.3 ms (≈0, within run-to-run noise) |
+| size   | pure RBS  | librbs                                |
+|--------|-----------|---------------------------------------|
+| small  |  96.6 ms  |  6.4 ms                               |
+| medium | 134.2 ms  | −9.3 ms (≈0, within run-to-run noise) |
+| large  | 1107.8 ms | −9.6 ms (≈0, within run-to-run noise) |
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~115ms (small) to ~1.6s (large) inside `resolve_type_names`, so
-that step alone accounts for ~2.2x (large) and ~1.5x (medium) of the
-gap.
+spends ~100ms (small) to ~1.1s (large) inside `resolve_type_names`, so
+that step alone accounts for the bulk of the resolve-path gap.
 
 ## Notes captured during the run
 
@@ -67,3 +66,16 @@ gap.
   result through a new `Loader::add_library_with_path` Rust API, mirroring
   upstream's `gem_sig_path` → `repository.lookup` fallback chain in
   `vendor/rbs/lib/rbs/environment_loader.rb#each_dir`.
+- Two materialiser optimisations landed after the original M4 baseline
+  was recorded and are reflected in the librbs numbers above:
+  - `TypeName` / `Namespace` are flyweighted by interner Sym, so the same
+    `(NamespaceSym, name, kind)` triple yields a shared Ruby instance
+    across the whole environment.
+  - `RBS::Location` children are appended via a dlsym FFI bridge into
+    `rbs_loc_legacy_add_required_child` /
+    `rbs_loc_legacy_add_optional_child`, with the children array
+    pre-sized via `rbs_loc_legacy_alloc_children`. Calling those C
+    entry points directly bypasses Ruby method dispatch, the
+    `rb_check_typeddata` re-lookup, `rb_sym2id`, `NUM2INT`, and the
+    Symbol allocation that the underscore-prefixed Ruby primitives
+    would otherwise perform on every child append.
