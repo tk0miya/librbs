@@ -25,6 +25,13 @@ use crate::materialize::MaterializeCtx;
 /// symbol. Shared between `build_type_name_from_sym` and the directive
 /// materialiser (which needs a freestanding `RBS::Namespace` for
 /// `Use::WildcardClause#namespace`).
+///
+/// When the namespace is the absolute root (`path: [], absolute: true`),
+/// we return the cached `RBS::Namespace.root` singleton instead of
+/// allocating a fresh instance — every resolved top-level type name
+/// (`::Object`, `::String`, …) reaches this path, so sharing the one
+/// memoized object Ruby keeps in `RBS::Namespace.@root` skips both an
+/// empty `Array` allocation and an `RBS::Namespace` allocation per hit.
 pub fn materialize_namespace(
     ctx: &MaterializeCtx<'_>,
     ns_sym: NamespaceSym,
@@ -32,6 +39,9 @@ pub fn materialize_namespace(
 ) -> Result<Value, Error> {
     let interner = ctx.interner;
     let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
+    if absolute && path_syms.is_empty() {
+        return Ok(ctx.classes.namespace_root);
+    }
     let path_array = ctx.ruby.ary_new_capa(path_syms.len());
     for s in path_syms {
         let seg = interner.symbols().lookup(*s);

@@ -34,6 +34,13 @@ pub mod type_param;
 pub struct ClassRefs {
     pub type_name: RClass,
     pub namespace: RClass,
+    /// Cached `RBS::Namespace.root` singleton. Reused whenever a
+    /// materialized type name's namespace is the absolute root
+    /// (`path: [], absolute: true`) so we share Ruby's memoized
+    /// `@root` instance instead of allocating a fresh `RBS::Namespace`
+    /// for every absolute top-level reference (which is the common
+    /// case after resolution).
+    pub namespace_root: Value,
     pub buffer: RClass,
     pub location: RClass,
     pub pathname: RClass,
@@ -101,6 +108,7 @@ impl ClassRefs {
         Ok(Self {
             type_name: ruby.eval("RBS::TypeName")?,
             namespace: ruby.eval("RBS::Namespace")?,
+            namespace_root: ruby.eval("RBS::Namespace.root")?,
             buffer: ruby.eval("RBS::Buffer")?,
             location: ruby.eval("RBS::Location")?,
             pathname: ruby.eval("Pathname")?,
