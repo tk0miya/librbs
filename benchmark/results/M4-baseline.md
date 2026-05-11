@@ -27,8 +27,8 @@ by the matching librbs column.
 
 | size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-----------|-----------------|-----------|---------------------|-----------|
-| small  |  155.1 ms |        146.2 ms |     1.06x |            163.9 ms |     0.95x |
-| large  | 1014.8 ms |        685.0 ms |     1.48x |            646.3 ms |     2.11x |
+| small  |  156.2 ms |        154.6 ms |     1.01x |             89.6 ms |     1.74x |
+| large  | 1184.4 ms |        709.8 ms |     1.67x |            379.3 ms |     3.12x |
 
 ## load_and_resolve.rb
 
@@ -36,15 +36,15 @@ by the matching librbs column.
 
 | size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-----------|-----------------|-----------|---------------------|-----------|
-| small  |  281.3 ms |        157.5 ms |     1.79x |            156.1 ms |     1.83x |
-| large  | 3115.1 ms |        770.7 ms |     4.04x |            691.5 ms |     4.87x |
+| small  |  289.0 ms |        161.6 ms |     1.79x |             98.6 ms |     2.93x |
+| large  | 3308.1 ms |        824.0 ms |     4.01x |            409.5 ms |     8.08x |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
-| size  | pure RBS  | librbs (normal) | librbs (fast alloc)                    |
-|-------|-----------|-----------------|----------------------------------------|
-| small |  126.2 ms |          11.3 ms|  −7.8 ms (≈0, within run-to-run noise) |
-| large | 2100.3 ms |          85.7 ms |  45.2 ms                              |
+| size  | pure RBS  | librbs (normal) | librbs (fast alloc)                   |
+|-------|-----------|-----------------|---------------------------------------|
+| small |  132.8 ms |          7.0 ms |   9.0 ms (≈0, within run-to-run noise)|
+| large | 2123.7 ms |        114.2 ms |  30.2 ms                              |
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
@@ -114,3 +114,40 @@ that step alone accounts for the bulk of the resolve-path gap.
     `Bool.new(location:)` at ≈1.8 µs/op. Gated at runtime by
     `LIBRBS_FAST_ALLOC` (see `benchmark/README.md`); the toggle is
     reflected in the `normal` / `fast alloc` columns above.
+  - **Fast alloc expansion** (PR #51, this revision). The
+    `obj_alloc + ivar_set` bypass was extended beyond `Types::Bases::*`
+    to every materializer call site whose upstream `initialize` is a
+    pure sequence of `@x = x` assignments: every remaining
+    `RBS::Types::*` (`Variable`, `Literal`, `ClassInstance`,
+    `Interface`, `Alias`, `ClassSingleton`, `Tuple`, `Union`,
+    `Intersection`, `Optional`, `Proc`, `Function`, `UntypedFunction`,
+    `Function::Param`, `Block`), `RBS::MethodType`, every
+    `RBS::AST::Declarations::*` (`Class`, `Module`, `Interface`,
+    `TypeAlias`, `Constant`, `Global`, `ClassAlias`, `ModuleAlias`),
+    and every `RBS::AST::Members::*` (`MethodDefinition`,
+    `AttrAccessor` / `AttrReader` / `AttrWriter`, `InstanceVariable`
+    / `ClassInstanceVariable` / `ClassVariable`, `Include` / `Extend`
+    / `Prepend`, `Alias`, `Public`, `Private`). The full set of
+    `@<field>` ivars is pre-interned on `MaterializeCtx::common`
+    (`@name`, `@type`, `@args`, `@types`, `@type_params`,
+    `@super_class`, `@members`, `@annotations`, `@comment`,
+    `@self_types`, `@new_name`, `@old_name`, `@kind`, `@overloads`,
+    `@overloading`, `@visibility`, `@ivar_name`, ...) so the hot path
+    hits zero `rb_intern2` calls. `Types::Record` is intentionally
+    excluded — its upstream `initialize` splits `all_fields` into
+    `@fields` / `@optional_fields`, which would need replicating in
+    Rust. Effect on the corpus measured above:
+
+    | script                | size  | normal   | fast     | delta f-vs-n |
+    |-----------------------|-------|----------|----------|--------------|
+    | `load_only.rb`        | small |  154.6 ms|   89.6 ms|       −42.0% |
+    | `load_only.rb`        | large |  709.8 ms|  379.3 ms|       −46.6% |
+    | `load_and_resolve.rb` | small |  161.6 ms|   98.6 ms|       −39.0% |
+    | `load_and_resolve.rb` | large |  824.0 ms|  409.5 ms|       −50.3% |
+
+    For the `large` cells the kwargs `Hash` allocation + `:initialize`
+    funcall dominated the materializer budget; eliminating those
+    halves the librbs cost. The single `LIBRBS_FAST_ALLOC` env var
+    continues to gate every call site so downstream users have one
+    knob to flip if upstream RBS ever changes an `initialize` we've
+    inlined.
