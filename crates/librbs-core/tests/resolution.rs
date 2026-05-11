@@ -13,6 +13,7 @@
 //! happen on the Ruby side from M3c onward.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use librbs_core::env::insert::insert_rbs_source;
 use librbs_core::env::resolution::ResolvedRef;
@@ -22,11 +23,12 @@ use librbs_core::source::Source;
 
 fn build_env(rbs_sources: &[&str]) -> Environment {
     let mut env = Environment::new();
+    env.sources.reserve(rbs_sources.len());
     for src in rbs_sources.iter() {
         let path = PathBuf::from(format!("/tmp/{}.rbs", env.sources.len()));
         let s = Source::new(path, src.to_string()).unwrap();
         insert_rbs_source(&mut env, s.parser.signature()).unwrap();
-        env.sources.push(s);
+        env.sources.push(Arc::new(s));
     }
     env
 }

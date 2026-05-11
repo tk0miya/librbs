@@ -34,7 +34,7 @@ impl TypeNameKind {
 
 // ---------- SymbolInterner ----------
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SymbolInterner {
     map: HashMap<String, Sym>,
     rev: Vec<String>,
@@ -76,7 +76,7 @@ impl SymbolInterner {
 
 // ---------- NamespaceInterner ----------
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct NamespaceInterner {
     map: HashMap<(Vec<Sym>, bool), NamespaceSym>,
     rev: Vec<(Vec<Sym>, bool)>,
@@ -225,7 +225,7 @@ impl NamespaceInterner {
 
 // ---------- TypeNameInterner ----------
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TypeNameInterner {
     pub symbols: SymbolInterner,
     pub namespaces: NamespaceInterner,

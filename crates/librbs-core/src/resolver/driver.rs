@@ -63,19 +63,14 @@ pub fn resolve(env: &mut Environment, only: Option<&FxHashSet<TypeNameSym>>) -> 
     table.compute_children(&env.interner);
 
     let mut resolution = Resolution::new();
-    let n = env.sources.len();
-    for idx in 0..n {
-        // SAFETY-equivalent split: `sources[idx]` is borrowed immutably as
-        // a *raw pointer for the AST traversal while we mutate
-        // `env.interner` and `env.resolution` via &mut Environment. The
-        // raw pointer is only ever turned back into a shared reference
-        // and never aliases a mutable borrow because the AST traversal
-        // never touches `env.sources`.
-        let src_ptr: *const Source = &env.sources[idx];
-        // The cast is safe because `Source` is heap-stable (it owns a
-        // `Box<str>` for content, and the parsed `SignatureNode` borrows
-        // from that box). We never resize `env.sources` during resolve.
-        let src: &Source = unsafe { &*src_ptr };
+    // Snapshot the sources via `Arc::clone` so the per-source walk can
+    // hold a `&Source` without keeping `env` borrowed — `env.interner`
+    // needs to be mutated by `record_type_name`. Each `Arc<Source>`
+    // clone is a single atomic increment; the underlying `Source`s are
+    // shared, not deep-copied. The snapshot is dropped at function
+    // return.
+    let sources = env.sources.clone();
+    for (idx, src) in sources.iter().enumerate() {
         resolve_source(
             idx as u32,
             src,
