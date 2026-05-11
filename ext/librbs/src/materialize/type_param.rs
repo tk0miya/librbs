@@ -24,11 +24,11 @@ pub fn materialize_type_param(
     add_optional_child(ctx, loc, "lower_bound", node.lower_bound_location())?;
     add_optional_child(ctx, loc, "default", node.default_location())?;
 
-    let name = ctx.ruby.to_symbol(node.name().as_str());
+    let name = ctx.symbol_for_str(node.name().as_str());
     let variance = match node.variance() {
-        TypeParamVariance::Invariant => ctx.ruby.to_symbol("invariant"),
-        TypeParamVariance::Covariant => ctx.ruby.to_symbol("covariant"),
-        TypeParamVariance::Contravariant => ctx.ruby.to_symbol("contravariant"),
+        TypeParamVariance::Invariant => ctx.common.invariant,
+        TypeParamVariance::Covariant => ctx.common.covariant,
+        TypeParamVariance::Contravariant => ctx.common.contravariant,
     };
     let upper_bound: Value = match node.upper_bound() {
         Some(n) => materialize_type(ctx, &n)?,

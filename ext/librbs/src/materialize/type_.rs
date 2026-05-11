@@ -145,7 +145,7 @@ fn variable_type(
     node: &VariableTypeNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    let name = ctx.ruby.to_symbol(node.name().as_str());
+    let name = ctx.symbol_for_str(node.name().as_str());
     Ok(ctx
         .classes
         .types_variable
@@ -168,7 +168,7 @@ fn literal_type(ctx: &mut MaterializeCtx<'_>, node: &LiteralTypeNode<'_>) -> Res
             let raw = s.string().as_str().to_string();
             raw.into_value_with(ctx.ruby)
         }
-        Node::Symbol(sym) => ctx.ruby.to_symbol(sym.as_str()).as_value(),
+        Node::Symbol(sym) => ctx.symbol_for_str(sym.as_str()),
         Node::Bool(b) => {
             // BoolNode exposes `value()` for the boolean payload.
             if b.value() {
@@ -342,7 +342,7 @@ fn record_type(ctx: &mut MaterializeCtx<'_>, node: &RecordTypeNode<'_>) -> Resul
     let all_fields = ctx.ruby.hash_new_capa(fields_hash.len());
     for (key, value) in fields_hash.iter() {
         let key_sym = match &key {
-            Node::Symbol(s) => ctx.ruby.to_symbol(s.as_str()),
+            Node::Symbol(s) => ctx.symbol_for_str(s.as_str()),
             // RecordType key shapes are always Symbol per the C parser
             // (`vendor/rbs/ext/rbs_extension/ast_translation.c`).
             _ => unreachable!("RBS::Types::Record key must be Symbol"),
@@ -407,7 +407,7 @@ fn function_param(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result<Value
     add_optional_child(ctx, loc, "name", p.name_location())?;
     let ty = materialize_type(ctx, &p.type_())?;
     let name: Value = match p.name() {
-        Some(sym) => ctx.ruby.to_symbol(sym.as_str()).as_value(),
+        Some(sym) => ctx.symbol_for_str(sym.as_str()),
         None => ctx.ruby.qnil().as_value(),
     };
     Ok(ctx
@@ -446,7 +446,7 @@ fn function_type(
         let Node::Symbol(s) = &key else {
             unreachable!("required_keywords key must be Symbol");
         };
-        required_keywords.aset(ctx.ruby.to_symbol(s.as_str()), function_param(ctx, &value)?)?;
+        required_keywords.aset(ctx.symbol_for_str(s.as_str()), function_param(ctx, &value)?)?;
     }
     let opt_kw_hash = node.optional_keywords();
     let optional_keywords = ctx.ruby.hash_new_capa(opt_kw_hash.len());
@@ -454,7 +454,7 @@ fn function_type(
         let Node::Symbol(s) = &key else {
             unreachable!("optional_keywords key must be Symbol");
         };
-        optional_keywords.aset(ctx.ruby.to_symbol(s.as_str()), function_param(ctx, &value)?)?;
+        optional_keywords.aset(ctx.symbol_for_str(s.as_str()), function_param(ctx, &value)?)?;
     }
     let rest_keywords: Value = match node.rest_keywords() {
         Some(p) => function_param(ctx, &p)?,

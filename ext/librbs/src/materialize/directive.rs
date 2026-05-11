@@ -92,7 +92,7 @@ fn materialize_use_single_clause(
 
     let type_name = build_directive_type_name(ctx, &c.type_name())?;
     let new_name: Value = match c.new_name() {
-        Some(sym) => ctx.ruby.to_symbol(sym.as_str()).as_value(),
+        Some(sym) => ctx.symbol_for_str(sym.as_str()),
         None => ctx.ruby.qnil().as_value(),
     };
 
@@ -141,7 +141,7 @@ fn build_directive_type_name(
 ) -> Result<Value, Error> {
     let ns_node = node.namespace();
     let namespace = build_namespace_from_node(ctx, &ns_node)?;
-    let name_sym = ctx.ruby.to_symbol(node.name().as_str());
+    let name_sym = ctx.symbol_for_str(node.name().as_str());
     Ok(ctx
         .classes
         .type_name
@@ -179,7 +179,7 @@ fn build_namespace_from_node(
     let path_array = ctx.ruby.ary_new_capa(path_list.len());
     for seg in path_list.iter() {
         if let Node::Symbol(sym) = seg {
-            path_array.push(ctx.ruby.to_symbol(sym.as_str()))?;
+            path_array.push(ctx.symbol_for_str(sym.as_str()))?;
         }
     }
     Ok(ctx

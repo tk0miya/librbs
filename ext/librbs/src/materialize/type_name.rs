@@ -37,8 +37,7 @@ pub fn materialize_namespace(
     let (path_syms, _absolute) = interner.namespaces().lookup(ns_sym);
     let path_array = ctx.ruby.ary_new_capa(path_syms.len());
     for s in path_syms {
-        let seg = interner.symbols().lookup(*s);
-        path_array.push(ctx.ruby.to_symbol(seg))?;
+        path_array.push(ctx.symbol_for(*s))?;
     }
     let namespace = ctx
         .classes
@@ -100,7 +99,7 @@ fn build_type_name_from_sym(
     let interner = ctx.interner;
     let (ns_sym, name_sym, _kind) = interner.lookup(sym);
     let namespace = materialize_namespace(ctx, ns_sym, mark_absolute)?;
-    let leaf = ctx.ruby.to_symbol(interner.symbols().lookup(name_sym));
+    let leaf = ctx.symbol_for(name_sym);
     let type_name: Value = ctx
         .classes
         .type_name
