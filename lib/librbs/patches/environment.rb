@@ -15,7 +15,18 @@ module Librbs
       # using only `RArray` C-API calls (no Ruby method dispatch). When
       # `only` is `nil` every declaration is resolved, matching the
       # upstream default.
+      #
+      # Pure-Ruby `RBS::Environment.new` instances (no `@__librbs_handle`)
+      # fall through to upstream. The native path is sound only when the
+      # handle's `Arc<Environment>` has strong count 1, which is
+      # established by `from_loader`; an env populated via `add_source`
+      # on the Ruby side has no Rust state to resolve against and must
+      # use upstream's `resolve_type_names`.
       def resolve_type_names(only: nil)
+        unless instance_variable_defined?(:@__librbs_handle)
+          return super
+        end
+
         only_array = only.nil? ? nil : only.to_a
         Librbs::Native.resolve_type_names(self, only_array)
       end
