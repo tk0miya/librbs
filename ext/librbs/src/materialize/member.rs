@@ -178,11 +178,9 @@ pub fn build_comment(
 
 fn method_definition_kind(ctx: &MaterializeCtx<'_>, kind: MethodDefinitionKind) -> Value {
     match kind {
-        MethodDefinitionKind::Instance => ctx.ruby.to_symbol("instance").as_value(),
-        MethodDefinitionKind::Singleton => ctx.ruby.to_symbol("singleton").as_value(),
-        MethodDefinitionKind::SingletonInstance => {
-            ctx.ruby.to_symbol("singleton_instance").as_value()
-        }
+        MethodDefinitionKind::Instance => ctx.common.instance,
+        MethodDefinitionKind::Singleton => ctx.common.singleton,
+        MethodDefinitionKind::SingletonInstance => ctx.common.singleton_instance,
     }
 }
 
@@ -192,30 +190,30 @@ fn method_definition_visibility(
 ) -> Value {
     match vis {
         MethodDefinitionVisibility::Unspecified => ctx.ruby.qnil().as_value(),
-        MethodDefinitionVisibility::Public => ctx.ruby.to_symbol("public").as_value(),
-        MethodDefinitionVisibility::Private => ctx.ruby.to_symbol("private").as_value(),
+        MethodDefinitionVisibility::Public => ctx.common.public,
+        MethodDefinitionVisibility::Private => ctx.common.private,
     }
 }
 
 fn attribute_kind(ctx: &MaterializeCtx<'_>, kind: AttributeKind) -> Value {
     match kind {
-        AttributeKind::Instance => ctx.ruby.to_symbol("instance").as_value(),
-        AttributeKind::Singleton => ctx.ruby.to_symbol("singleton").as_value(),
+        AttributeKind::Instance => ctx.common.instance,
+        AttributeKind::Singleton => ctx.common.singleton,
     }
 }
 
 fn attribute_visibility(ctx: &MaterializeCtx<'_>, vis: AttributeVisibility) -> Value {
     match vis {
         AttributeVisibility::Unspecified => ctx.ruby.qnil().as_value(),
-        AttributeVisibility::Public => ctx.ruby.to_symbol("public").as_value(),
-        AttributeVisibility::Private => ctx.ruby.to_symbol("private").as_value(),
+        AttributeVisibility::Public => ctx.common.public,
+        AttributeVisibility::Private => ctx.common.private,
     }
 }
 
 fn alias_kind(ctx: &MaterializeCtx<'_>, kind: AliasKind) -> Value {
     match kind {
-        AliasKind::Instance => ctx.ruby.to_symbol("instance").as_value(),
-        AliasKind::Singleton => ctx.ruby.to_symbol("singleton").as_value(),
+        AliasKind::Instance => ctx.common.instance,
+        AliasKind::Singleton => ctx.common.singleton,
     }
 }
 
@@ -243,7 +241,7 @@ fn attr_ivar_name(
             let start = range.start() as usize;
             let end = range.end() as usize;
             let text = &content[start..end];
-            ctx.ruby.to_symbol(text).as_value()
+            ctx.symbol_for_str(text)
         }
     }
 }
@@ -273,7 +271,7 @@ fn method_definition(
     add_optional_child(ctx, loc, "overloading", node.overloading_location())?;
     add_optional_child(ctx, loc, "visibility", node.visibility_location())?;
 
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let kind = method_definition_kind(ctx, node.kind());
     let visibility = method_definition_visibility(ctx, node.visibility());
 
@@ -292,7 +290,7 @@ fn method_definition(
         let overload_class: magnus::RClass = ctx
             .classes
             .members_method_definition
-            .funcall("const_get", (ctx.ruby.to_symbol("Overload"),))?;
+            .funcall("const_get", (ctx.common.overload,))?;
         let overload = overload_class
             .new_instance((kwargs!(
                 "method_type" => method_type,
@@ -367,7 +365,7 @@ fn attr_accessor(
             visibility: node.visibility_location(),
         },
     )?;
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let ivar_name = attr_ivar_name(ctx, node.ivar_name(), node.ivar_name_location());
     let kind = attribute_kind(ctx, node.kind());
@@ -404,7 +402,7 @@ fn attr_reader(ctx: &mut MaterializeCtx<'_>, node: &AttrReaderNode<'_>) -> Resul
             visibility: node.visibility_location(),
         },
     )?;
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let ivar_name = attr_ivar_name(ctx, node.ivar_name(), node.ivar_name_location());
     let kind = attribute_kind(ctx, node.kind());
@@ -441,7 +439,7 @@ fn attr_writer(ctx: &mut MaterializeCtx<'_>, node: &AttrWriterNode<'_>) -> Resul
             visibility: node.visibility_location(),
         },
     )?;
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let ivar_name = attr_ivar_name(ctx, node.ivar_name(), node.ivar_name_location());
     let kind = attribute_kind(ctx, node.kind());
@@ -490,7 +488,7 @@ fn instance_variable(
         node.colon_location(),
         node.kind_location(),
     )?;
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let comment = build_comment(ctx, node.comment())?;
     Ok(ctx
@@ -516,7 +514,7 @@ fn class_instance_variable(
         node.colon_location(),
         node.kind_location(),
     )?;
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let comment = build_comment(ctx, node.comment())?;
     Ok(ctx
@@ -542,7 +540,7 @@ fn class_variable(
         node.colon_location(),
         node.kind_location(),
     )?;
-    let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let name = ctx.symbol_for_str(node.name().as_str());
     let ty = materialize_type(ctx, &node.type_())?;
     let comment = build_comment(ctx, node.comment())?;
     Ok(ctx
@@ -662,8 +660,8 @@ fn alias_member(ctx: &mut MaterializeCtx<'_>, node: &AliasNode<'_>) -> Result<Va
     add_optional_child(ctx, loc, "new_kind", node.new_kind_location())?;
     add_optional_child(ctx, loc, "old_kind", node.old_kind_location())?;
 
-    let new_name = ctx.ruby.to_symbol(node.new_name().as_str()).as_value();
-    let old_name = ctx.ruby.to_symbol(node.old_name().as_str()).as_value();
+    let new_name = ctx.symbol_for_str(node.new_name().as_str());
+    let old_name = ctx.symbol_for_str(node.old_name().as_str());
     let kind = alias_kind(ctx, node.kind());
     let annotations = build_annotations(ctx, node.annotations())?;
     let comment = build_comment(ctx, node.comment())?;

@@ -8,13 +8,17 @@
 //! `materialize_all` cut-over (M3h). The actual per-node materialization
 //! (types, members, decls) lands in M3f / M3g / M3h.
 
+use std::cell::RefCell;
+use std::ffi::c_char;
+use std::os::raw::c_long;
+
 use magnus::{Error, RClass, RHash, Ruby, Value, kwargs, prelude::*, value::ReprValue};
 
 use librbs_core::Environment;
 use librbs_core::Source;
 use librbs_core::env::DeclRef;
 use librbs_core::env::resolution::{Resolution, ResolvedRef};
-use librbs_core::interner::{FrozenInterner, NamespaceSym, TypeNameSym};
+use librbs_core::interner::{FrozenInterner, NamespaceSym, Sym, TypeNameSym};
 
 pub mod decl;
 pub mod directive;
@@ -95,6 +99,77 @@ pub struct ClassRefs {
     pub directives_use_wildcard_clause: RClass,
     pub directives_resolve_type_names: RClass,
     pub source_rbs: RClass,
+}
+
+/// Pre-interned Ruby `Symbol` values for strings that show up across
+/// the materializer with fixed text — method-definition kinds /
+/// visibilities, attribute kinds, type-param variances, etc. Each
+/// field stores a static `Symbol` interned via `rb_intern2` +
+/// `rb_id2sym`, so the values are immortal (Ruby's static symbol
+/// table never collects them) and safe to keep around as plain
+/// `Value`s without GC tracking. Built once per [`MaterializeCtx`] in
+/// [`CommonSyms::resolve`], read tens of thousands of times during
+/// stdlib materialization.
+#[derive(Clone, Copy)]
+pub struct CommonSyms {
+    pub instance: Value,
+    pub singleton: Value,
+    pub singleton_instance: Value,
+    pub public: Value,
+    pub private: Value,
+    pub invariant: Value,
+    pub covariant: Value,
+    pub contravariant: Value,
+    pub overload: Value,
+}
+
+impl CommonSyms {
+    pub fn resolve() -> Self {
+        Self {
+            instance: intern_symbol("instance"),
+            singleton: intern_symbol("singleton"),
+            singleton_instance: intern_symbol("singleton_instance"),
+            public: intern_symbol("public"),
+            private: intern_symbol("private"),
+            invariant: intern_symbol("invariant"),
+            covariant: intern_symbol("covariant"),
+            contravariant: intern_symbol("contravariant"),
+            overload: intern_symbol("Overload"),
+        }
+    }
+}
+
+/// Intern `name` directly into a static Ruby `Symbol` via
+/// `rb_intern2` + `rb_id2sym`. Cheaper than `Ruby::to_symbol`, which
+/// builds an intermediate `RString` per call (the materializer hits
+/// the same handful of static strings hundreds of thousands of times
+/// for stdlib loads, so the per-call `RString` allocation is the bulk
+/// of the cost there).
+///
+/// The returned `Symbol` is a static-symbol value, identical bit
+/// pattern as `rb_id2sym(rb_intern2(...))` — Ruby's GC never frees
+/// these, so callers can store the result in plain `Value` fields.
+#[inline]
+pub fn intern_symbol(name: &str) -> Value {
+    // SAFETY: `rb_intern2` reads `len` bytes from `ptr`, hashes them
+    // into Ruby's process-wide static symbol table, and returns a
+    // stable `ID`. `rb_id2sym` is a pure bit-tagging operation. The
+    // returned `VALUE` is a static-symbol immediate, which matches
+    // the bit pattern `magnus::Value` expects.
+    unsafe {
+        let id = rb_sys::rb_intern2(name.as_ptr() as *const c_char, name.len() as c_long);
+        rb_value_to_value(rb_sys::rb_id2sym(id))
+    }
+}
+
+/// Reinterpret a raw `rb_sys::VALUE` as `magnus::Value`. The mirror of
+/// `rbs_extension_ffi::raw_value`: `Value` is `#[repr(transparent)]`
+/// over `(VALUE, PhantomData<...>)`, so the bit pattern is shared.
+#[inline]
+unsafe fn rb_value_to_value(v: rb_sys::VALUE) -> Value {
+    // SAFETY: see above. `Value`'s size equals `VALUE`'s size; the
+    // PhantomData has zero size.
+    unsafe { std::mem::transmute_copy(&v) }
 }
 
 impl ClassRefs {
@@ -248,6 +323,23 @@ pub struct MaterializeCtx<'a> {
     /// whether the call site is resolution-aware (resolved →
     /// `absolute!`) or raw (preserves AST flag).
     type_name_cache: RHash,
+    /// Pre-interned static Ruby `Symbol`s for fixed strings used by
+    /// the materializer (kind / visibility / variance values, the
+    /// `Overload` constant lookup key, ...). See [`CommonSyms`].
+    pub common: CommonSyms,
+    /// Flyweight cache for interner-backed `Symbol`s. Each interner
+    /// [`Sym`] (a `u32` assigned by `SymbolInterner`) maps one-to-one
+    /// to a static Ruby symbol; this `Vec` indexed by `Sym.0` skips
+    /// even Ruby's static-symbol-table hash lookup on the second hit.
+    ///
+    /// Stored as `RefCell<Vec<rb_sys::VALUE>>` (0 = uninitialized
+    /// sentinel; `rb_id2sym` always produces a non-zero immediate
+    /// tagged with `RUBY_SYMBOL_FLAG`). Plain `Vec` rather than a
+    /// Ruby `RArray` because the cached `VALUE`s are static symbols —
+    /// immortal — so Ruby's GC has nothing to scan and the extra
+    /// write-barrier / boxing cost of `RArray.aset` is pure overhead
+    /// for this access pattern.
+    symbol_cache: RefCell<Vec<rb_sys::VALUE>>,
 }
 
 pub(crate) fn namespace_cache_key(ns: NamespaceSym, absolute: bool) -> i64 {
@@ -278,6 +370,7 @@ impl<'a> MaterializeCtx<'a> {
         resolution: Option<&'a Resolution>,
         classes: ClassRefs,
     ) -> Self {
+        let symbol_cache = vec![0 as rb_sys::VALUE; env.interner.frozen().symbols().len()];
         Self {
             ruby,
             env,
@@ -290,7 +383,54 @@ impl<'a> MaterializeCtx<'a> {
             cursor: 0,
             namespace_cache: ruby.hash_new(),
             type_name_cache: ruby.hash_new(),
+            common: CommonSyms::resolve(),
+            symbol_cache: RefCell::new(symbol_cache),
         }
+    }
+
+    /// Materialize an interner-backed [`Sym`] into a Ruby static
+    /// `Symbol`, caching the result in `symbol_cache`. First call for
+    /// a given `sym` calls into Ruby's static-symbol table; every
+    /// subsequent call is a `Vec` index.
+    #[inline]
+    pub fn symbol_for(&self, sym: Sym) -> Value {
+        let idx = sym.0 as usize;
+        {
+            let cache = self.symbol_cache.borrow();
+            if let Some(&v) = cache.get(idx)
+                && v != 0
+            {
+                // SAFETY: a non-zero slot was previously populated by
+                // `intern_symbol`, which produced a static-symbol
+                // `VALUE`. That bit pattern is a valid `Value`.
+                return unsafe { rb_value_to_value(v) };
+            }
+        }
+        let s = self.interner.symbols().lookup(sym);
+        let value = intern_symbol(s);
+        let mut cache = self.symbol_cache.borrow_mut();
+        if idx >= cache.len() {
+            // `intern()` (via `directive::materialize_use_clause`) can
+            // grow the interner after `MaterializeCtx::new` snapshotted
+            // its length; resize the cache lazily to cover those late
+            // additions. Falls back to direct intern without caching
+            // if the slot is still out of range somehow.
+            cache.resize(idx + 1, 0);
+        }
+        // SAFETY: identical reinterpret as in `intern_symbol` —
+        // `Value` and `VALUE` share representation.
+        cache[idx] = unsafe { std::mem::transmute_copy::<Value, rb_sys::VALUE>(&value) };
+        value
+    }
+
+    /// Intern an arbitrary `&str` directly via `rb_intern2` +
+    /// `rb_id2sym`, bypassing magnus's `to_symbol` (which allocates
+    /// an intermediate `RString`). Use this for strings that are not
+    /// indexed by an interner `Sym`. See [`intern_symbol`] for the
+    /// safety notes.
+    #[inline]
+    pub fn symbol_for_str(&self, name: &str) -> Value {
+        intern_symbol(name)
     }
 
     /// Look up a previously materialised `RBS::Namespace` for the given

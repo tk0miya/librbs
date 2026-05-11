@@ -109,7 +109,7 @@ pub fn add_required_child<R: ChildRange>(
     if rbs_extension_ffi::try_add_required_child(loc, name, start, end) {
         return Ok(());
     }
-    let sym = ctx.ruby.to_symbol(name);
+    let sym = ctx.symbol_for_str(name);
     let _: Value = loc.funcall("_add_required_child", (sym, start, end))?;
     Ok(())
 }
@@ -130,14 +130,14 @@ pub fn add_optional_child<R: ChildRange>(
             if rbs_extension_ffi::try_add_optional_child(loc, name, start, end) {
                 return Ok(());
             }
-            let sym = ctx.ruby.to_symbol(name);
+            let sym = ctx.symbol_for_str(name);
             let _: Value = loc.funcall("_add_optional_child", (sym, start, end))?;
         }
         None => {
             if rbs_extension_ffi::try_add_optional_no_child(loc, name) {
                 return Ok(());
             }
-            let sym = ctx.ruby.to_symbol(name);
+            let sym = ctx.symbol_for_str(name);
             let _: Value = loc.funcall("_add_optional_no_child", (sym,))?;
         }
     }

@@ -340,7 +340,7 @@ fn materialize_global_node(
     add_required_child(ctx, loc, "name", node.name_location())?;
     add_required_child(ctx, loc, "colon", node.colon_location())?;
 
-    let ruby_name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
+    let ruby_name = ctx.symbol_for_str(node.name().as_str());
     let target_node = node.type_();
     let ty = materialize_type(ctx, &target_node)?;
     let comment = build_comment(ctx, node.comment())?;
