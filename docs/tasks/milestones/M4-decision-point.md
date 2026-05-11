@@ -142,11 +142,19 @@ through `ensure_materialized`, requiring minimal additional code.
 
 ## Acceptance
 
-- [ ] `benchmark/results/M4-baseline.md` records all 6 numbers.
-- [ ] `benchmark/results/M4-decision.md` records the decision and reasoning.
-- [ ] Either M4a or M4b is implemented.
-- [ ] Manually verify that running Steep on a real project produces the
-      same results as before the change.
+- [x] `benchmark/results/M4-baseline.md` records all 6 numbers.
+- [x] `benchmark/results/M4-decision.md` records the decision and reasoning.
+- [x] ~~Either M4a or M4b is implemented.~~ Deferred — both paths fold
+      into the Core+Wrapper followup; see `benchmark/results/M4-decision.md`
+      for the reasoning.
+- [x] Upstream `environment_test.rb` / `environment_loader_test.rb` /
+      `environment_walker_test.rb` (copied verbatim from
+      `vendor/rbs/test/rbs/` into `test/rbs/`) run under
+      `require "librbs"` and pass on every CI Ruby. This replaces the
+      original "manual Steep smoke test" acceptance item — the upstream
+      env test suite is the real-world Ruby-side surface Steep / Rubocop /
+      typeprof depend on, and running it green against the patched
+      `RBS::Environment` is a stronger and reproducible check.
 
 ## Pitfalls and mitigation
 

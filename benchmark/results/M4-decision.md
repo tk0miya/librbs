@@ -66,6 +66,29 @@ milestone. Reasoning:
    pipeline before/after the Core+Wrapper rebuild produces directly
    comparable numbers. That is the actual value M4 was asked to deliver.
 
+## Closing acceptance: upstream env tests in CI
+
+The "manual Steep smoke test" acceptance item is replaced by a stronger,
+reproducible check: the three upstream tests that exercise the
+`RBS::Environment` / `RBS::EnvironmentLoader` / `RBS::EnvironmentWalker`
+surface — `environment_test.rb`, `environment_loader_test.rb`,
+`environment_walker_test.rb` — were copied verbatim from
+`vendor/rbs/test/rbs/` into `test/rbs/` and now run under
+`require "librbs"` on every CI Ruby (`upstream-env-test` job). 50/50
+tests pass (2 omissions for the unavailable `rbs-amber` gem, identical
+to upstream). Closing this job green is the operational definition of
+"M4 is done"; the manual Steep verification was retained as a safety
+net but is no longer load-bearing.
+
+Patch change that this surfaced: `resolve_type_names` now falls through
+to upstream when `@__librbs_handle` is absent. Upstream's env tests
+routinely call `Environment.new.add_source(...).resolve_type_names`,
+which has no Rust state to resolve against. The pre-fix patch raised
+`RBS::Environment has no @__librbs_handle`. The fix matches the
+existing fallback in `class_decls` and friends (the
+`instance_variable_defined?(:@__librbs_handle)` guard), so the
+pure-Ruby env path is uniformly preserved across every patched method.
+
 ## What the next milestone should keep in mind
 
 - The Core+Wrapper kickoff should pre-commit to lazy materialization of

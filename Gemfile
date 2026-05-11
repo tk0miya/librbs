@@ -10,4 +10,5 @@ group :development do
   gem "rake", "~> 13.0"
   gem "rake-compiler"
   gem "rspec", "~> 3.0"
+  gem "test-unit", "~> 3.6"
 end
