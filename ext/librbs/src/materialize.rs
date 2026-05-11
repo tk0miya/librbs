@@ -356,6 +356,35 @@ pub struct MaterializeCtx<'a> {
     /// write-barrier / boxing cost of `RArray.aset` is pure overhead
     /// for this access pattern.
     symbol_cache: RefCell<Vec<rb_sys::VALUE>>,
+    /// Whether to use the `obj_alloc + ivar_set` fast path that
+    /// bypasses upstream initializers (currently
+    /// `RBS::Types::Bases::*` and `Bases::Any`; new call sites will
+    /// be gated on the same field as they are added). Snapshotted
+    /// from [`fast_alloc_env`] at [`MaterializeCtx::new`] so the hot
+    /// path reads a plain `bool` field instead of an atomic. The env
+    /// var is read exactly once per process — see the function for
+    /// the parsing rules.
+    pub fast_alloc: bool,
+}
+
+/// Read `LIBRBS_FAST_ALLOC` once and cache the answer. Default: fast
+/// path enabled. Values that disable it: `0`, `false`, `off`, `no`
+/// (case-insensitive). Everything else (including unset) keeps it on.
+///
+/// The flag is intentionally singular even though it currently only
+/// gates the `Types::Bases::*` family — the next waves of bypass
+/// (kwargs-`Hash` elimination for `Types::ClassInstance`,
+/// `MethodType`, `Members::*`, ...) will reuse the same switch so
+/// downstream users have one knob to flip.
+pub fn fast_alloc_env() -> bool {
+    static CELL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CELL.get_or_init(|| match std::env::var("LIBRBS_FAST_ALLOC") {
+        Ok(s) => {
+            let t = s.trim().to_ascii_lowercase();
+            !matches!(t.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => true,
+    })
 }
 
 pub(crate) fn namespace_cache_key(ns: NamespaceSym, absolute: bool) -> i64 {
@@ -401,6 +430,7 @@ impl<'a> MaterializeCtx<'a> {
             type_name_cache: ruby.hash_new(),
             common: CommonSyms::resolve(ruby),
             symbol_cache: RefCell::new(symbol_cache),
+            fast_alloc: fast_alloc_env(),
         }
     }
 

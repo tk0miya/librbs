@@ -38,9 +38,9 @@ the install command.
 
 ## Running
 
-Each script drives one workload across all three sizes (`small` / `medium`
-/ `large`) and both implementations (pure RBS and librbs), then prints a
-Markdown table with cold-start wall times and the librbs speedup.
+Each script drives one workload across two sizes (`small` and `large`)
+and both implementations (pure RBS and librbs), then prints a Markdown
+table with cold-start wall times and the librbs speedup.
 
 ```sh
 bundle exec ruby benchmark/load_only.rb
@@ -51,6 +51,19 @@ The pure-RBS and librbs cases run in **separate Ruby subprocesses** —
 `require "librbs"` patches `RBS::Environment` globally and there is no
 clean way to undo that in the same process. `helpers.rb` handles the
 subprocess plumbing.
+
+### Toggling the `obj_alloc + ivar_set` fast path
+
+librbs's bypass of upstream initializers (currently `Types::Bases::*`)
+is gated at runtime by `LIBRBS_FAST_ALLOC`. Default is on; set it to
+`0` to fall back to the upstream `Class#new` path. The bench
+subprocess inherits this from the parent shell, so a normal-vs-fast
+comparison is just two invocations:
+
+```sh
+bundle exec ruby benchmark/load_only.rb                       # fast alloc on (default)
+LIBRBS_FAST_ALLOC=0 bundle exec ruby benchmark/load_only.rb   # bypass off (normal)
+```
 
 ## What each script measures
 
@@ -69,8 +82,6 @@ purely the cost of `resolve_type_names`.
 Defined in `helpers.rb` under `BenchHelpers::SIZES`:
 
 - `small` — core only (no extra `loader.add`).
-- `medium` — core + a representative subset of stdlib signatures bundled
-  with rbs (set, pathname, date, time, uri, ...).
 - `large` — core + the gem RBS collection produced by SeleniumHQ/selenium's
   `rbs_collection.lock.yaml` (~33 external gems via gem_rbs_collection).
   Requires the one-shot `rbs collection install` step described above.

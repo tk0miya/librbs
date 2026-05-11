@@ -10,43 +10,45 @@ globally — see `benchmark/helpers.rb`).
 Sizes:
 
 - **small**: core only.
-- **medium**: core + `pathname date time uri optparse logger stringio strscan`.
 - **large**: core + the gem RBS collection produced by SeleniumHQ/selenium's
   `rbs_collection.lock.yaml` (~33 gems via gem_rbs_collection, plus
   rubygems-sourced sigs such as `webrick`, `prism`).
+
+librbs is reported in two columns — **normal** (upstream
+`Class#new` initializers) and **fast alloc** (the `obj_alloc +
+ivar_set` bypass; this is the default). See `benchmark/README.md`
+for the env-var knob. `speedup_n` / `speedup_f` are pure-RBS divided
+by the matching librbs column.
 
 ## load_only.rb
 
 `from_loader` + materialize (`class_decls.size` triggers
 `Native.materialize_all`).
 
-| size   | pure RBS | librbs   | speedup |
-|--------|----------|----------|---------|
-| small  | 125.5 ms | 118.9 ms | 1.05x   |
-| medium | 150.3 ms | 151.2 ms | 0.99x   |
-| large  | 860.2 ms | 529.2 ms | 1.63x   |
+| size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
+|--------|-----------|-----------------|-----------|---------------------|-----------|
+| small  |  155.1 ms |        146.2 ms |     1.06x |            163.9 ms |     0.95x |
+| large  | 1014.8 ms |        685.0 ms |     1.48x |            646.3 ms |     2.11x |
 
 ## load_and_resolve.rb
 
 `from_loader` + `resolve_type_names` + materialize.
 
-| size   | pure RBS  | librbs   | speedup |
-|--------|-----------|----------|---------|
-| small  |  244.3 ms | 123.1 ms | 1.98x   |
-| medium |  292.5 ms | 151.1 ms | 1.94x   |
-| large  | 2365.8 ms | 571.0 ms | 4.14x   |
+| size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
+|--------|-----------|-----------------|-----------|---------------------|-----------|
+| small  |  281.3 ms |        157.5 ms |     1.79x |            156.1 ms |     1.83x |
+| large  | 3115.1 ms |        770.7 ms |     4.04x |            691.5 ms |     4.87x |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
-| size   | pure RBS  | librbs                                |
-|--------|-----------|---------------------------------------|
-| small  |  118.8 ms |   4.2 ms                              |
-| medium |  142.2 ms |  −0.1 ms (≈0, within run-to-run noise)|
-| large  | 1505.6 ms |  41.8 ms                              |
+| size  | pure RBS  | librbs (normal) | librbs (fast alloc)                    |
+|-------|-----------|-----------------|----------------------------------------|
+| small |  126.2 ms |          11.3 ms|  −7.8 ms (≈0, within run-to-run noise) |
+| large | 2100.3 ms |          85.7 ms |  45.2 ms                              |
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~100ms (small) to ~1.2s (large) inside `resolve_type_names`, so
+spends ~120ms (small) to ~2.1s (large) inside `resolve_type_names`, so
 that step alone accounts for the bulk of the resolve-path gap.
 
 ## Notes captured during the run
@@ -89,8 +91,8 @@ that step alone accounts for the bulk of the resolve-path gap.
     `start` / `end` (we already have them as `i32`s out of the parser).
     On a same-machine A/B (best of 8 cold runs each) `large` load_only
     moved from 631.2 ms → 572.3 ms (−9%) with no measurable change on
-    `small` / `medium` — the per-call savings only surface above the
-    noise floor on workloads with enough Location allocations.
+    `small` — the per-call savings only surface above the noise floor
+    on workloads with enough Location allocations.
   - Static Ruby `Symbol` values used by the materializer (kind /
     visibility / variance keywords, the `Overload` const-get key) are
     pre-interned once on `MaterializeCtx::common`, and interner-backed
@@ -109,4 +111,6 @@ that step alone accounts for the bulk of the resolve-path gap.
     untyped / bool / nil / void / self / top, ≈12k Bases instances)
     best-of-3 min wall time dropped from ~228 ms to ~200 ms (≈12%);
     pure-Ruby micro shows `alloc + ivar_set` at ≈460 ns/op vs
-    `Bool.new(location:)` at ≈1.8 µs/op.
+    `Bool.new(location:)` at ≈1.8 µs/op. Gated at runtime by
+    `LIBRBS_FAST_ALLOC` (see `benchmark/README.md`); the toggle is
+    reflected in the `normal` / `fast alloc` columns above.

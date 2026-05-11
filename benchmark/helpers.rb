@@ -35,11 +35,6 @@ module BenchHelpers
     small: {
       libraries: []
     },
-    medium: {
-      libraries: %w[
-        pathname date time uri optparse logger stringio strscan
-      ]
-    },
     large: {
       collection: "fixtures/selenium.rbs_collection.lock.yaml"
     }
