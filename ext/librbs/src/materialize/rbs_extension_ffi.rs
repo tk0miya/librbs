@@ -1,10 +1,15 @@
 //! Best-effort FFI bridge into the upstream `rbs_extension.so`.
 //!
-//! Four functions in upstream rbs are useful enough to reach for
+//! Five functions in upstream rbs are useful enough to reach for
 //! directly even though they are not part of any documented API:
 //!
 //! - `rbs_check_location(VALUE) -> rbs_loc*` extracts the C struct
 //!   backing an `RBS::Location`.
+//! - `rbs_new_location2(VALUE buffer, int start_char, int end_char)
+//!   -> VALUE` allocates a fresh `RBS::Location` directly via
+//!   `TypedData_Make_Struct` + `rbs_loc_init`, skipping
+//!   `RBS::Location.new` method dispatch and the `FIX2INT` round-trips
+//!   that `location_initialize` would otherwise perform.
 //! - `rbs_loc_legacy_alloc_children(rbs_loc*, u16)` pre-sizes the
 //!   `children` array on that struct. Without it, each child-add
 //!   call grows the backing buffer by one entry via `realloc`.
@@ -72,11 +77,13 @@ struct RbsLocRange {
 const NULL_RANGE: RbsLocRange = RbsLocRange { start: -1, end: -1 };
 
 type FnCheckLocation = unsafe extern "C" fn(rb_sys::VALUE) -> *mut RbsLoc;
+type FnNewLocation2 = unsafe extern "C" fn(rb_sys::VALUE, c_int, c_int) -> rb_sys::VALUE;
 type FnAllocChildren = unsafe extern "C" fn(*mut RbsLoc, u16);
 type FnAddChild = unsafe extern "C" fn(*mut RbsLoc, rb_sys::ID, RbsLocRange);
 
 struct Symbols {
     check_location: Option<FnCheckLocation>,
+    new_location2: Option<FnNewLocation2>,
     alloc_children: Option<FnAllocChildren>,
     add_required_child: Option<FnAddChild>,
     add_optional_child: Option<FnAddChild>,
@@ -88,6 +95,7 @@ fn resolve() -> &'static Symbols {
     SYMBOLS.get_or_init(|| unsafe {
         Symbols {
             check_location: dlsym_fn(c"rbs_check_location"),
+            new_location2: dlsym_fn(c"rbs_new_location2"),
             alloc_children: dlsym_fn(c"rbs_loc_legacy_alloc_children"),
             add_required_child: dlsym_fn(c"rbs_loc_legacy_add_required_child"),
             add_optional_child: dlsym_fn(c"rbs_loc_legacy_add_optional_child"),
@@ -133,6 +141,35 @@ fn intern(name: &str) -> rb_sys::ID {
     // does not allocate Ruby objects. The slice's pointer/length pair
     // is valid for the duration of the call.
     unsafe { rb_sys::rb_intern2(name.as_ptr() as *const c_char, name.len() as c_long) }
+}
+
+/// Allocate a fresh `RBS::Location` directly via the upstream
+/// `rbs_new_location2` C entry point. Panics if the symbol is
+/// unavailable — librbs requires a compatible `rbs_extension.so` and
+/// there is no useful Ruby-side fallback for this call site (every
+/// materialised AST node carries an `RBS::Location`, so a missing
+/// symbol means the materialiser cannot run at all).
+///
+/// `buffer` must be an `RBS::Buffer` (the C side stores it without
+/// type-checking, then later C accessors `rb_check_typeddata` it). The
+/// returned `VALUE` is GC-rooted by the caller (it sits on the Rust
+/// stack as a magnus `Value` and is conservatively scanned).
+pub fn new_location(buffer: Value, start: i32, end: i32) -> Value {
+    let new_location = resolve()
+        .new_location2
+        .expect("rbs_new_location2 must be exported by rbs_extension.so");
+    // SAFETY: `buffer` is a valid Ruby VALUE held by the caller and the
+    // GC will not move it for the duration of this call.
+    // `rbs_new_location2` allocates a fresh TypedData object via
+    // `TypedData_Make_Struct` and writes `buffer` into the struct;
+    // every store is a plain field write that does not depend on
+    // `buffer` being type-checked. The returned VALUE is a fresh
+    // RBS::Location that magnus tracks as soon as we wrap it.
+    let raw = unsafe { new_location(raw_value(buffer), start as c_int, end as c_int) };
+    // SAFETY: `rbs_new_location2` returns a valid Ruby VALUE; magnus's
+    // `Value` is `#[repr(transparent)]` over `VALUE`, so the bit
+    // pattern transfers directly.
+    unsafe { std::mem::transmute_copy(&raw) }
 }
 
 /// Pre-size the children array on the `rbs_loc` backing the given

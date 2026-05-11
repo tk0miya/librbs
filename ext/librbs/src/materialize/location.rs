@@ -32,7 +32,7 @@
 //! a borrow when they need to keep the range around afterwards
 //! (e.g. attr-member helpers that read the same fields twice).
 
-use magnus::{Error, Value, prelude::*, value::ReprValue};
+use magnus::{Error, Value, prelude::*};
 
 use ruby_rbs::node::RBSLocationRange;
 
@@ -71,15 +71,18 @@ impl<T: ChildRange + ?Sized> ChildRange for &T {
 
 /// `RBS::Location.new(buffer, start_char, end_char)` for the current
 /// source. Reads the active buffer from [`MaterializeCtx::buffer`].
+///
+/// Uses the dlsym FFI path into `rbs_new_location2`, which builds the
+/// `RBS::Location` directly via `TypedData_Make_Struct` +
+/// `rbs_loc_init` and skips Ruby method dispatch, the
+/// `rbs_check_location` re-lookup that `RBS::Location#initialize`
+/// would perform, and the two `FIX2INT` round-trips on `start` / `end`
+/// (we already have them as `i32`s out of the parser).
 pub fn make_location(ctx: &MaterializeCtx<'_>, range: &RBSLocationRange) -> Result<Value, Error> {
     let buffer = ctx.buffer();
     let start = range.start_char();
     let end = range.end_char();
-    Ok(ctx
-        .classes
-        .location
-        .new_instance((buffer, start, end))?
-        .as_value())
+    Ok(rbs_extension_ffi::new_location(buffer, start, end))
 }
 
 /// Pre-size the location's children array to hold `cap` entries.

@@ -6,35 +6,36 @@ Date: 2026-05-11
 
 | script                | small | medium | large |
 |-----------------------|-------|--------|-------|
-| `load_only.rb`        | 1.03x | 1.22x  | 1.53x |
-| `load_and_resolve.rb` | 1.83x | 2.00x  | 4.26x |
+| `load_only.rb`        | 1.05x | 0.99x  | 1.63x |
+| `load_and_resolve.rb` | 1.98x | 1.94x  | 4.14x |
 
 Resolve cost in librbs is essentially zero on every size; pure RBS
-spends ~100ms (small) to ~1.2s (large) inside `resolve_type_names`. The
+spends ~120ms (small) to ~1.5s (large) inside `resolve_type_names`. The
 M3d resolver port is unambiguously paying off.
 
-The load-only path now sits at 1.03x / 1.22x / 1.53x after the
+The load-only path now sits at 1.05x / 0.99x / 1.63x after the
 post-baseline materialiser tuning (`TypeName` / `Namespace` flyweighting,
 the `RBS::Location` children FFI fast path, the per-ctx static-Symbol
-cache, and the `RBS::Types::Bases::*` `obj_alloc` + `ivar_set` fast
-path — all documented in `M4-baseline.md`). `large` and `medium` are
-clear wins for librbs; `small` has crept ahead of pure RBS but its
-remaining margin is dominated by fixed parser+loader cost rather than
-the materialiser.
+cache, the `RBS::Types::Bases::*` `obj_alloc` + `ivar_set` fast path,
+and the `rbs_new_location2` FFI fast path for `RBS::Location.new`
+itself — all documented in `M4-baseline.md`). `large` is a clear win
+for librbs; `small` and `medium` are within run-to-run noise of pure
+RBS, with the remaining margin dominated by fixed parser+loader cost
+rather than the materialiser.
 
 ## Mapping to the M4 decision flow
 
 The flow in `docs/tasks/milestones/M4-decision-point.md` (Task §4) reads:
 
 - `load_and_resolve >= 2x AND load_only >= 2x` → M4b. **Not matched** —
-  `large` is closest (4.26x and 1.53x) but `load_only` does not clear
+  `large` is closest (4.14x and 1.63x) but `load_only` does not clear
   2x.
 - `load_and_resolve >= 3x AND load_only < 1.5x` → M4a. **Borderline on
-  large** (4.26x and 1.53x): `load_only` now just clears 1.5x after the
-  Bases / Symbol cache work, so the materialize ceiling is narrower
-  than at the original M4 baseline.
+  large** (4.14x and 1.63x): `load_only` clears 1.5x after the
+  Bases / Symbol cache and `rbs_new_location2` FFI work, so the
+  materialize ceiling is narrower than at the original M4 baseline.
 - `load_and_resolve < 1.5x` → re-investigate M3. **Not matched** —
-  `medium` reads 2.00x.
+  `medium` reads 1.94x.
 
 ## Decision: defer implementation; record baseline only
 
