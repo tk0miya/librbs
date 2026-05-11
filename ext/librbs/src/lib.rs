@@ -281,10 +281,11 @@ fn resolve_type_names(env_ruby: Value, only: Value) -> Result<Value, Error> {
     //    and never escapes. It is dropped before we re-attach
     //    `handle_value` to the new env via `ivar_set`.
     //
-    // M3e materialization will add an extra Arc clone path; before that
-    // ships, this safety argument needs to be re-checked (and the
-    // followup "Reimplement RBS::Environment in Rust" likely closes
-    // this hatch entirely by giving the env interior mutability).
+    // M3e materialization shipped without disturbing the strong-count-is-1
+    // invariant — `materialize_all` reads `env` through `&` only. The hatch
+    // is closed by the "`resolve_type_names` mutates the source env's
+    // shared core state" followup in `docs/tasks/followups.md`, which
+    // replaces this in-place mutation with an owned clone.
     let env: &mut librbs_core::Environment = unsafe { &mut *env_ptr };
 
     let only_set: Option<FxHashSet<TypeNameSym>> = convert_only(&mut env.interner, only)?;
@@ -293,9 +294,8 @@ fn resolve_type_names(env_ruby: Value, only: Value) -> Result<Value, Error> {
 
     // Allocate a fresh `RBS::Environment`. Pattern matches `build_environment`:
     // `allocate` + `send(:initialize)` so the upstream `@class_decls = {}`
-    // etc. ivars exist for any future `super` call. (See the M3 followup
-    // "Reimplement RBS::Environment in Rust" for why this allocate-and-
-    // initialize dance survives in the patch-based design.)
+    // etc. ivars exist for any future `super` call from the patched
+    // accessors in `lib/librbs/patches/environment.rb`.
     let rbs_env_class: magnus::RClass = ruby.eval("RBS::Environment")?;
     let rbs_env: Value = rbs_env_class.obj_alloc()?.as_value();
     let _: Value = rbs_env.funcall("send", (ruby.to_symbol("initialize"),))?;
