@@ -45,7 +45,7 @@ module BenchHelpers
     }
   }.freeze
 
-  IMPLS = %i[pure_rbs librbs].freeze
+  IMPLS = %i[pure_rbs rbs_patched rbs_patched_v2 librbs].freeze
 
   module_function
 
@@ -103,6 +103,18 @@ module BenchHelpers
     when :pure_rbs
       <<~RUBY
         require "rbs"
+      RUBY
+    when :rbs_patched
+      <<~RUBY
+        $LOAD_PATH.unshift(File.expand_path("benchmark", #{ROOT.inspect}))
+        require "rbs"
+        require "rbs_intern_patch"
+      RUBY
+    when :rbs_patched_v2
+      <<~RUBY
+        $LOAD_PATH.unshift(File.expand_path("benchmark", #{ROOT.inspect}))
+        require "rbs"
+        require "rbs_intern_patch_v2"
       RUBY
     when :librbs
       <<~RUBY
@@ -195,19 +207,34 @@ module BenchHelpers
     format("%.2fx", pure / lib)
   end
 
-  # Drives a single benchmark across all SIZES × {pure_rbs, librbs} and
-  # prints a Markdown table. `expr` is the workload string evaluated inside
-  # the timed block; it has access to the local `loader` from
-  # `loader_setup`.
-  def report_realtime(title:, expr:, repeats: 3, sizes: SIZES.keys)
+  # Drives a single benchmark across all SIZES × IMPLS and prints a
+  # Markdown table. `expr` is the workload string evaluated inside the
+  # timed block; it has access to the local `loader` from `loader_setup`.
+  #
+  # `impls` defaults to the full list (pure_rbs, rbs_patched, librbs).
+  # The "speedup" columns are computed against `pure_rbs` as baseline.
+  def report_realtime(title:, expr:, repeats: 3, sizes: SIZES.keys, impls: IMPLS)
     puts "## #{title}"
     puts
-    rows = sizes.map do |size|
-      pure = measure_realtime(impl: :pure_rbs, size: size, expr: expr, repeats: repeats)
-      lib  = measure_realtime(impl: :librbs,   size: size, expr: expr, repeats: repeats)
-      [size.to_s, format_ms(pure), format_ms(lib), format_speedup(pure, lib)]
+    measurements = sizes.each_with_object({}) do |size, h|
+      h[size] = impls.each_with_object({}) do |impl, ih|
+        ih[impl] = measure_realtime(impl: impl, size: size, expr: expr, repeats: repeats)
+      end
     end
-    print_table(["size", "pure RBS", "librbs", "speedup"], rows)
+
+    headers = ["size"] + impls.map(&:to_s)
+    speedup_impls = impls - [:pure_rbs]
+    headers += speedup_impls.map { |i| "#{i} speedup" } if impls.include?(:pure_rbs)
+
+    rows = sizes.map do |size|
+      cells = [size.to_s] + impls.map { |i| format_ms(measurements[size][i]) }
+      if impls.include?(:pure_rbs)
+        base = measurements[size][:pure_rbs]
+        cells += speedup_impls.map { |i| format_speedup(base, measurements[size][i]) }
+      end
+      cells
+    end
+    print_table(headers, rows)
     puts
   end
 
