@@ -13,6 +13,7 @@ rb-sys = { version = "0.9", features = ["stable-api-compiled-fallback"] }
 librbs-core = { path = "../../crates/librbs-core" }
 ruby-rbs = "0.3"
 rustc-hash = "2"
+libc = "0.2"
 
 [build-dependencies]
 rb-sys-env = "0.2.2"

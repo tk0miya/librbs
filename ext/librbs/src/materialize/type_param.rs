@@ -6,7 +6,9 @@ use magnus::{Error, RArray, Value, kwargs, prelude::*, value::ReprValue};
 use ruby_rbs::node::{Node, TypeParamNode, TypeParamVariance};
 
 use crate::materialize::MaterializeCtx;
-use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::location::{
+    add_optional_child, add_required_child, alloc_children, make_location,
+};
 use crate::materialize::type_::materialize_type;
 
 pub fn materialize_type_param(
@@ -14,22 +16,13 @@ pub fn materialize_type_param(
     node: &TypeParamNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_optional_child(ctx, loc, "variance", node.variance_location().as_ref())?;
-    add_optional_child(ctx, loc, "unchecked", node.unchecked_location().as_ref())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "upper_bound",
-        node.upper_bound_location().as_ref(),
-    )?;
-    add_optional_child(
-        ctx,
-        loc,
-        "lower_bound",
-        node.lower_bound_location().as_ref(),
-    )?;
-    add_optional_child(ctx, loc, "default", node.default_location().as_ref())?;
+    alloc_children(ctx, loc, 6);
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_optional_child(ctx, loc, "variance", node.variance_location())?;
+    add_optional_child(ctx, loc, "unchecked", node.unchecked_location())?;
+    add_optional_child(ctx, loc, "upper_bound", node.upper_bound_location())?;
+    add_optional_child(ctx, loc, "lower_bound", node.lower_bound_location())?;
+    add_optional_child(ctx, loc, "default", node.default_location())?;
 
     let name = ctx.ruby.to_symbol(node.name().as_str());
     let variance = match node.variance() {

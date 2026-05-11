@@ -20,7 +20,9 @@ use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
 use ruby_rbs::node::{Node, NodeList, UseNode, UseSingleClauseNode, UseWildcardClauseNode};
 
 use crate::materialize::MaterializeCtx;
-use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::location::{
+    add_optional_child, add_required_child, alloc_children, make_location,
+};
 use crate::materialize::type_name::materialize_namespace;
 
 /// Build the Ruby `Array[RBS::AST::Directives::*]` for one source.
@@ -54,7 +56,7 @@ pub fn materialize_directives(
 
 fn materialize_use(ctx: &mut MaterializeCtx<'_>, u: &UseNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &u.location())?;
-    add_required_child(ctx, loc, "keyword", &u.keyword_location())?;
+    add_required_child(ctx, loc, "keyword", u.keyword_location())?;
 
     let clauses_list = u.clauses();
     let clauses = ctx.ruby.ary_new_capa(clauses_list.len());
@@ -83,9 +85,10 @@ fn materialize_use_single_clause(
     c: &UseSingleClauseNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &c.location())?;
-    add_required_child(ctx, loc, "type_name", &c.type_name_location())?;
-    add_optional_child(ctx, loc, "keyword", c.keyword_location().as_ref())?;
-    add_optional_child(ctx, loc, "new_name", c.new_name_location().as_ref())?;
+    alloc_children(ctx, loc, 3);
+    add_required_child(ctx, loc, "type_name", c.type_name_location())?;
+    add_optional_child(ctx, loc, "keyword", c.keyword_location())?;
+    add_optional_child(ctx, loc, "new_name", c.new_name_location())?;
 
     let type_name = build_directive_type_name(ctx, &c.type_name())?;
     let new_name: Value = match c.new_name() {
@@ -109,8 +112,9 @@ fn materialize_use_wildcard_clause(
     c: &UseWildcardClauseNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &c.location())?;
-    add_required_child(ctx, loc, "namespace", &c.namespace_location())?;
-    add_required_child(ctx, loc, "star", &c.star_location())?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "namespace", c.namespace_location())?;
+    add_required_child(ctx, loc, "star", c.star_location())?;
 
     let ns_node = c.namespace();
     let namespace = build_namespace_from_node(ctx, &ns_node)?;
@@ -210,27 +214,25 @@ fn materialize_magic_comment(
         .location
         .new_instance((buffer, m.start as i64, m.end as i64))?
         .as_value();
+    alloc_children(ctx, loc, 3);
 
-    let kw_range = ctx
-        .ruby
-        .range_new(m.keyword_start as i64, m.keyword_end as i64, false)?;
-    let _: Value = loc.funcall(
-        "add_required_child",
-        (ctx.ruby.to_symbol("keyword"), kw_range),
+    add_required_child(
+        ctx,
+        loc,
+        "keyword",
+        (m.keyword_start as i32, m.keyword_end as i32),
     )?;
-    let colon_range = ctx
-        .ruby
-        .range_new(m.colon_start as i64, m.colon_end as i64, false)?;
-    let _: Value = loc.funcall(
-        "add_required_child",
-        (ctx.ruby.to_symbol("colon"), colon_range),
+    add_required_child(
+        ctx,
+        loc,
+        "colon",
+        (m.colon_start as i32, m.colon_end as i32),
     )?;
-    let value_range = ctx
-        .ruby
-        .range_new(m.value_start as i64, m.value_end as i64, false)?;
-    let _: Value = loc.funcall(
-        "add_required_child",
-        (ctx.ruby.to_symbol("value"), value_range),
+    add_required_child(
+        ctx,
+        loc,
+        "value",
+        (m.value_start as i32, m.value_end as i32),
     )?;
 
     let value: Value = if m.value_true {
