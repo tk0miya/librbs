@@ -10,7 +10,9 @@
 //! [`MaterializeCtx`] via [`materialize_resolved_type_name`] in the
 //! same pre-order the driver pushes them.
 
-use magnus::{Error, IntoValue, RArray, Value, kwargs, prelude::*, value::ReprValue};
+use magnus::{
+    Error, IntoValue, RArray, RObject, Value, kwargs, prelude::*, value::Id, value::ReprValue,
+};
 
 use librbs_core::env::insert::find_type_name_node;
 use ruby_rbs::node::{
@@ -120,24 +122,56 @@ pub fn materialize_type(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result
     }
 }
 
+/// Set `@<id>` on `obj` via the magnus `Object::ivar_set` path, with
+/// the ivar id pre-interned once on [`crate::materialize::CommonSyms`].
+/// The win over the `new_instance(kwargs!(...))` path is that we skip
+/// the per-call kwargs Hash allocation and the `:initialize` funcall —
+/// the only remaining work is a single `rb_ivar_set`.
+#[inline]
+fn set_ivar(obj: Value, id: Id, value: Value) -> Result<(), Error> {
+    // `obj_alloc` always produces a `T_OBJECT` for `RBS::Types::Bases::*`,
+    // so the cheap typecheck inside `RObject::from_value` succeeds and we
+    // can call `Object::ivar_set` without re-dispatching through `funcall`.
+    let robj = RObject::from_value(obj).expect("obj_alloc must yield T_OBJECT");
+    robj.ivar_set(id, value)
+}
+
+/// Fast-path `RBS::Types::Bases::*` constructor: skip
+/// `new_instance(kwargs!(...))` and write `@location` straight onto a
+/// freshly-allocated instance.
+///
+/// Upstream `Bases::Base#initialize` is a one-line `@location =
+/// location`; building the kwargs hash, invoking `:initialize`, and
+/// unpacking the kwargs all cost more than the single ivar write they
+/// wrap. The whole `Types::Bases` module — `Bool`, `Void`, `Nil`,
+/// `Top`, `Bottom`, `Self`, `Instance`, `Class`, and `Any` — has had
+/// the same shape since rbs 1.x, so we're betting that the class's
+/// internal layout stays a plain object with a `@location` ivar.
+/// If that ever changes upstream, `bases_only` and [`any_type`] are
+/// the two call sites to revisit.
 fn bases_only(
     ctx: &mut MaterializeCtx<'_>,
     node: &Node<'_>,
     class: magnus::RClass,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    Ok(class
-        .new_instance((kwargs!("location" => loc),))?
-        .as_value())
+    let obj = class.obj_alloc()?.as_value();
+    set_ivar(obj, ctx.common.ivar_location, loc)?;
+    Ok(obj)
 }
 
 fn any_type(ctx: &mut MaterializeCtx<'_>, node: &AnyTypeNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    Ok(ctx
-        .classes
-        .types_bases_any
-        .new_instance((kwargs!("location" => loc, "todo" => node.todo()),))?
-        .as_value())
+    let obj = ctx.classes.types_bases_any.obj_alloc()?.as_value();
+    set_ivar(obj, ctx.common.ivar_location, loc)?;
+    // Mirrors `RBS::Types::Bases::Any#initialize`: only set `@string`
+    // when `todo: true`. Reading an unset ivar from Ruby returns `nil`,
+    // which is exactly what `to_s` falls back to.
+    if node.todo() {
+        let s: Value = "__todo__".into_value_with(ctx.ruby);
+        set_ivar(obj, ctx.common.ivar_string, s)?;
+    }
+    Ok(obj)
 }
 
 fn variable_type(

@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::ffi::c_char;
 use std::os::raw::c_long;
 
-use magnus::{Error, RClass, RHash, Ruby, Value, kwargs, prelude::*, value::ReprValue};
+use magnus::{Error, RClass, RHash, Ruby, Value, kwargs, prelude::*, value::Id, value::ReprValue};
 
 use librbs_core::Environment;
 use librbs_core::Source;
@@ -121,10 +121,24 @@ pub struct CommonSyms {
     pub covariant: Value,
     pub contravariant: Value,
     pub overload: Value,
+    /// Pre-interned `:@location` ivar id. Used by the
+    /// `RBS::Types::Bases::*` fast path
+    /// ([`crate::materialize::type_::bases_only`] /
+    /// [`crate::materialize::type_::any_type`]) to write `@location`
+    /// directly via `obj_alloc` + `ivar_set`, bypassing
+    /// `new_instance(kwargs!(...))`. Stored as a Ruby `Id` (the raw
+    /// `ID` `rb_intern2` returns) rather than a `Symbol` value because
+    /// `rb_ivar_set` consumes an `ID` directly — wrapping it as a
+    /// `Symbol` would force a `rb_sym2id` round-trip at every use.
+    pub ivar_location: Id,
+    /// Pre-interned `:@string` ivar id. Only used by
+    /// `RBS::Types::Bases::Any` when `todo: true`, mirroring upstream
+    /// `Bases::Any#initialize` setting `@string = "__todo__"`.
+    pub ivar_string: Id,
 }
 
 impl CommonSyms {
-    pub fn resolve() -> Self {
+    pub fn resolve(ruby: &Ruby) -> Self {
         Self {
             instance: intern_symbol("instance"),
             singleton: intern_symbol("singleton"),
@@ -135,6 +149,8 @@ impl CommonSyms {
             covariant: intern_symbol("covariant"),
             contravariant: intern_symbol("contravariant"),
             overload: intern_symbol("Overload"),
+            ivar_location: ruby.intern("@location"),
+            ivar_string: ruby.intern("@string"),
         }
     }
 }
@@ -383,7 +399,7 @@ impl<'a> MaterializeCtx<'a> {
             cursor: 0,
             namespace_cache: ruby.hash_new(),
             type_name_cache: ruby.hash_new(),
-            common: CommonSyms::resolve(),
+            common: CommonSyms::resolve(ruby),
             symbol_cache: RefCell::new(symbol_cache),
         }
     }
