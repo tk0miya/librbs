@@ -22,7 +22,9 @@ use ruby_rbs::node::{
 };
 
 use crate::materialize::MaterializeCtx;
-use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::location::{
+    add_optional_child, add_required_child, alloc_children, make_location,
+};
 use crate::materialize::method_type::materialize_method_type;
 use crate::materialize::type_::materialize_type;
 use crate::materialize::type_name::materialize_resolved_type_name;
@@ -264,16 +266,12 @@ fn method_definition(
     node: &MethodDefinitionNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_optional_child(ctx, loc, "kind", node.kind_location().as_ref())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "overloading",
-        node.overloading_location().as_ref(),
-    )?;
-    add_optional_child(ctx, loc, "visibility", node.visibility_location().as_ref())?;
+    alloc_children(ctx, loc, 5);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_optional_child(ctx, loc, "kind", node.kind_location())?;
+    add_optional_child(ctx, loc, "overloading", node.overloading_location())?;
+    add_optional_child(ctx, loc, "visibility", node.visibility_location())?;
 
     let name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
     let kind = method_definition_kind(ctx, node.kind());
@@ -341,13 +339,14 @@ struct AttrLocations {
 
 fn build_attr_location(ctx: &mut MaterializeCtx<'_>, locs: AttrLocations) -> Result<Value, Error> {
     let loc = make_location(ctx, &locs.range)?;
-    add_required_child(ctx, loc, "keyword", &locs.keyword)?;
-    add_required_child(ctx, loc, "name", &locs.name)?;
-    add_required_child(ctx, loc, "colon", &locs.colon)?;
-    add_optional_child(ctx, loc, "kind", locs.kind.as_ref())?;
-    add_optional_child(ctx, loc, "ivar", locs.ivar.as_ref())?;
-    add_optional_child(ctx, loc, "ivar_name", locs.ivar_name.as_ref())?;
-    add_optional_child(ctx, loc, "visibility", locs.visibility.as_ref())?;
+    alloc_children(ctx, loc, 7);
+    add_required_child(ctx, loc, "keyword", locs.keyword)?;
+    add_required_child(ctx, loc, "name", locs.name)?;
+    add_required_child(ctx, loc, "colon", locs.colon)?;
+    add_optional_child(ctx, loc, "kind", locs.kind)?;
+    add_optional_child(ctx, loc, "ivar", locs.ivar)?;
+    add_optional_child(ctx, loc, "ivar_name", locs.ivar_name)?;
+    add_optional_child(ctx, loc, "visibility", locs.visibility)?;
     Ok(loc)
 }
 
@@ -473,9 +472,10 @@ fn build_var_location(
     kind: Option<RBSLocationRange>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &range)?;
-    add_required_child(ctx, loc, "name", &name)?;
-    add_required_child(ctx, loc, "colon", &colon)?;
-    add_optional_child(ctx, loc, "kind", kind.as_ref())?;
+    alloc_children(ctx, loc, 3);
+    add_required_child(ctx, loc, "name", name)?;
+    add_required_child(ctx, loc, "colon", colon)?;
+    add_optional_child(ctx, loc, "kind", kind)?;
     Ok(loc)
 }
 
@@ -565,9 +565,10 @@ fn build_mixin_location(
     args: Option<RBSLocationRange>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &range)?;
-    add_required_child(ctx, loc, "name", &name)?;
-    add_required_child(ctx, loc, "keyword", &keyword)?;
-    add_optional_child(ctx, loc, "args", args.as_ref())?;
+    alloc_children(ctx, loc, 3);
+    add_required_child(ctx, loc, "name", name)?;
+    add_required_child(ctx, loc, "keyword", keyword)?;
+    add_optional_child(ctx, loc, "args", args)?;
     Ok(loc)
 }
 
@@ -654,11 +655,12 @@ fn prepend_member(ctx: &mut MaterializeCtx<'_>, node: &PrependNode<'_>) -> Resul
 
 fn alias_member(ctx: &mut MaterializeCtx<'_>, node: &AliasNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "new_name", &node.new_name_location())?;
-    add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
-    add_optional_child(ctx, loc, "new_kind", node.new_kind_location().as_ref())?;
-    add_optional_child(ctx, loc, "old_kind", node.old_kind_location().as_ref())?;
+    alloc_children(ctx, loc, 5);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "new_name", node.new_name_location())?;
+    add_required_child(ctx, loc, "old_name", node.old_name_location())?;
+    add_optional_child(ctx, loc, "new_kind", node.new_kind_location())?;
+    add_optional_child(ctx, loc, "old_kind", node.old_kind_location())?;
 
     let new_name = ctx.ruby.to_symbol(node.new_name().as_str()).as_value();
     let old_name = ctx.ruby.to_symbol(node.old_name().as_str()).as_value();

@@ -29,7 +29,9 @@ use ruby_rbs::node::{
 };
 
 use crate::materialize::MaterializeCtx;
-use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::location::{
+    add_optional_child, add_required_child, alloc_children, make_location,
+};
 use crate::materialize::member::{build_annotations, build_comment, materialize_member};
 use crate::materialize::type_::materialize_type;
 use crate::materialize::type_name::{materialize_resolved_type_name, materialize_type_name};
@@ -130,16 +132,12 @@ fn materialize_class_node(
     counter: &mut u32,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_required_child(ctx, loc, "end", &node.end_location())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "type_params",
-        node.type_params_location().as_ref(),
-    )?;
-    add_optional_child(ctx, loc, "lt", node.lt_location().as_ref())?;
+    alloc_children(ctx, loc, 5);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_required_child(ctx, loc, "end", node.end_location())?;
+    add_optional_child(ctx, loc, "type_params", node.type_params_location())?;
+    add_optional_child(ctx, loc, "lt", node.lt_location())?;
 
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
 
@@ -188,17 +186,13 @@ fn materialize_module_node(
     counter: &mut u32,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_required_child(ctx, loc, "end", &node.end_location())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "type_params",
-        node.type_params_location().as_ref(),
-    )?;
-    add_optional_child(ctx, loc, "colon", node.colon_location().as_ref())?;
-    add_optional_child(ctx, loc, "self_types", node.self_types_location().as_ref())?;
+    alloc_children(ctx, loc, 6);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_required_child(ctx, loc, "end", node.end_location())?;
+    add_optional_child(ctx, loc, "type_params", node.type_params_location())?;
+    add_optional_child(ctx, loc, "colon", node.colon_location())?;
+    add_optional_child(ctx, loc, "self_types", node.self_types_location())?;
 
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
@@ -246,15 +240,11 @@ fn materialize_interface_node(
     node: &InterfaceNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_required_child(ctx, loc, "end", &node.end_location())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "type_params",
-        node.type_params_location().as_ref(),
-    )?;
+    alloc_children(ctx, loc, 4);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_required_child(ctx, loc, "end", node.end_location())?;
+    add_optional_child(ctx, loc, "type_params", node.type_params_location())?;
 
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
@@ -287,15 +277,11 @@ fn materialize_type_alias_node(
     node: &TypeAliasNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_required_child(ctx, loc, "eq", &node.eq_location())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "type_params",
-        node.type_params_location().as_ref(),
-    )?;
+    alloc_children(ctx, loc, 4);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_required_child(ctx, loc, "eq", node.eq_location())?;
+    add_optional_child(ctx, loc, "type_params", node.type_params_location())?;
 
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let type_params = materialize_type_params(ctx, node.type_params())?;
@@ -323,8 +309,9 @@ fn materialize_constant_node(
     node: &ConstantNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_required_child(ctx, loc, "colon", &node.colon_location())?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_required_child(ctx, loc, "colon", node.colon_location())?;
 
     let ruby_name = decl_self_name(ctx, &node.name(), full_name)?;
     let target_node = node.type_();
@@ -349,8 +336,9 @@ fn materialize_global_node(
     node: &GlobalNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "name", &node.name_location())?;
-    add_required_child(ctx, loc, "colon", &node.colon_location())?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "name", node.name_location())?;
+    add_required_child(ctx, loc, "colon", node.colon_location())?;
 
     let ruby_name = ctx.ruby.to_symbol(node.name().as_str()).as_value();
     let target_node = node.type_();
@@ -376,10 +364,11 @@ fn materialize_class_alias_node(
     node: &ClassAliasNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "new_name", &node.new_name_location())?;
-    add_required_child(ctx, loc, "eq", &node.eq_location())?;
-    add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
+    alloc_children(ctx, loc, 4);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "new_name", node.new_name_location())?;
+    add_required_child(ctx, loc, "eq", node.eq_location())?;
+    add_required_child(ctx, loc, "old_name", node.old_name_location())?;
 
     let ruby_new_name = decl_self_name(ctx, &node.new_name(), full_new_name)?;
     let raw_old = find_type_name_node(ctx.interner, &node.old_name())
@@ -407,10 +396,11 @@ fn materialize_module_alias_node(
     node: &ModuleAliasNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "keyword", &node.keyword_location())?;
-    add_required_child(ctx, loc, "new_name", &node.new_name_location())?;
-    add_required_child(ctx, loc, "eq", &node.eq_location())?;
-    add_required_child(ctx, loc, "old_name", &node.old_name_location())?;
+    alloc_children(ctx, loc, 4);
+    add_required_child(ctx, loc, "keyword", node.keyword_location())?;
+    add_required_child(ctx, loc, "new_name", node.new_name_location())?;
+    add_required_child(ctx, loc, "eq", node.eq_location())?;
+    add_required_child(ctx, loc, "old_name", node.old_name_location())?;
 
     let ruby_new_name = decl_self_name(ctx, &node.new_name(), full_new_name)?;
     let raw_old = find_type_name_node(ctx.interner, &node.old_name())
@@ -550,8 +540,9 @@ fn decl_self_name(
 
 fn class_super(ctx: &mut MaterializeCtx<'_>, sc: &ClassSuperNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &sc.location())?;
-    add_required_child(ctx, loc, "name", &sc.name_location())?;
-    add_optional_child(ctx, loc, "args", sc.args_location().as_ref())?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "name", sc.name_location())?;
+    add_optional_child(ctx, loc, "args", sc.args_location())?;
 
     let raw = find_type_name_node(ctx.interner, &sc.name())
         .expect("super class name pre-interned by insert");
@@ -574,8 +565,9 @@ fn class_super(ctx: &mut MaterializeCtx<'_>, sc: &ClassSuperNode<'_>) -> Result<
 
 fn module_self(ctx: &mut MaterializeCtx<'_>, ms: &ModuleSelfNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &ms.location())?;
-    add_required_child(ctx, loc, "name", &ms.name_location())?;
-    add_optional_child(ctx, loc, "args", ms.args_location().as_ref())?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "name", ms.name_location())?;
+    add_optional_child(ctx, loc, "args", ms.args_location())?;
 
     let raw = find_type_name_node(ctx.interner, &ms.name())
         .expect("module self-type name pre-interned by insert");

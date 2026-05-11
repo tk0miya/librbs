@@ -11,7 +11,9 @@ use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
 use ruby_rbs::node::{BlockTypeNode, MethodTypeNode};
 
 use crate::materialize::MaterializeCtx;
-use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::location::{
+    add_optional_child, add_required_child, alloc_children, make_location,
+};
 use crate::materialize::type_::materialize_type;
 use crate::materialize::type_param::materialize_type_params;
 
@@ -31,13 +33,9 @@ pub fn materialize_method_type(
     node: &MethodTypeNode<'_>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    add_required_child(ctx, loc, "type", &node.type_location())?;
-    add_optional_child(
-        ctx,
-        loc,
-        "type_params",
-        node.type_params_location().as_ref(),
-    )?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "type", node.type_location())?;
+    add_optional_child(ctx, loc, "type_params", node.type_params_location())?;
 
     let type_params = materialize_type_params(ctx, node.type_params())?;
 

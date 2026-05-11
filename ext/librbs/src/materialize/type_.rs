@@ -20,7 +20,9 @@ use ruby_rbs::node::{
 };
 
 use crate::materialize::MaterializeCtx;
-use crate::materialize::location::{add_optional_child, add_required_child, make_location};
+use crate::materialize::location::{
+    add_optional_child, add_required_child, alloc_children, make_location,
+};
 use crate::materialize::method_type::materialize_block;
 use crate::materialize::type_name::materialize_resolved_type_name;
 
@@ -192,8 +194,9 @@ fn name_args_location(
     args_range: Option<ruby_rbs::node::RBSLocationRange>,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &range)?;
-    add_required_child(ctx, loc, "name", &name_range)?;
-    add_optional_child(ctx, loc, "args", args_range.as_ref())?;
+    alloc_children(ctx, loc, 2);
+    add_required_child(ctx, loc, "name", name_range)?;
+    add_optional_child(ctx, loc, "args", args_range)?;
     Ok(loc)
 }
 
@@ -401,7 +404,7 @@ fn function_param(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Result<Value
         unreachable!("function param list must hold FunctionParam nodes");
     };
     let loc = make_location(ctx, &p.location())?;
-    add_optional_child(ctx, loc, "name", p.name_location().as_ref())?;
+    add_optional_child(ctx, loc, "name", p.name_location())?;
     let ty = materialize_type(ctx, &p.type_())?;
     let name: Value = match p.name() {
         Some(sym) => ctx.ruby.to_symbol(sym.as_str()).as_value(),
