@@ -277,10 +277,15 @@ fn class_singleton_type(
     )?;
     let raw_name = find_type_name_node(ctx.interner, &node.name()).expect("name pre-interned");
     let name = materialize_resolved_type_name(ctx, raw_name)?;
+    // Upstream `ast_translation.c::RBS_TYPES_CLASS_SINGLETON` passes
+    // `args:` even though `singleton(X)` syntax never carries generics
+    // — keep the kwarg shape identical so canonical-dump compares
+    // byte-for-byte.
+    let args = build_args_array(ctx, node.args())?;
     Ok(ctx
         .classes
         .types_class_singleton
-        .new_instance((kwargs!("name" => name, "location" => loc),))?
+        .new_instance((kwargs!("name" => name, "args" => args, "location" => loc),))?
         .as_value())
 }
 
