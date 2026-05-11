@@ -14,7 +14,6 @@
 
 use std::path::PathBuf;
 
-use librbs_core::SourceTag;
 use librbs_core::env::insert::insert_rbs_source;
 use librbs_core::env::resolution::ResolvedRef;
 use librbs_core::env::{DeclRef, Environment};
@@ -23,14 +22,12 @@ use librbs_core::source::Source;
 
 fn build_env(rbs_sources: &[&str]) -> Environment {
     let mut env = Environment::new();
-    let mut sources: Vec<Source> = Vec::new();
     for src in rbs_sources.iter() {
-        let path = PathBuf::from(format!("/tmp/{}.rbs", sources.len()));
-        let s = Source::new(SourceTag::Dir(path.clone()), path, src.to_string()).unwrap();
+        let path = PathBuf::from(format!("/tmp/{}.rbs", env.sources.len()));
+        let s = Source::new(path, src.to_string()).unwrap();
         insert_rbs_source(&mut env, s.parser.signature()).unwrap();
-        sources.push(s);
+        env.sources.push(s);
     }
-    env.sources = sources;
     env
 }
 

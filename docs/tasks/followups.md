@@ -116,8 +116,9 @@ belong in this list.
   immediately discards the pre-resolution env. No code reads the source
   env after calling `resolve_type_names` on it, so the shared-mutation
   is invisible in practice. The safety argument in `lib.rs:236-255`
-  also relies on the strong count being 1, which the current
-  `from_loader` path guarantees.
+  also relies on the strong count being 1, which the
+  `Librbs::Native.load_env` path (driven from the patched
+  `RBS::EnvironmentLoader#load`) guarantees.
 - **Risk**: A future caller (downstream gem, user script, or a new
   internal pass) that holds onto the pre-resolution env and expects it
   to stay un-resolved will see corrupted-looking state. The failure
@@ -153,38 +154,6 @@ belong in this list.
   `src.@__librbs_handle` is *not* `equal?` to `dst.@__librbs_handle`
   once the fix lands).
 
-### Full `Gem::Version` semantics in `librbs-core`
-
-- **Origin**: M2 review.
-- **Where**: `crates/librbs-core/src/discovery/repository.rs` (`Version`,
-  `GemRBS`, `Repository`). These types are internal to `librbs-core` and
-  not exposed across the Ruby boundary, but `Repository::lookup` is the
-  function that selects which gem version to load — its result must
-  match `Gem::Version`'s `find_best_version` for the inputs we will see.
-- **What**: The current `Version` only accepts dotted numeric segments and
-  rejects everything else (`1.0.0.alpha` → `None`). For `vendor/rbs/stdlib`
-  this is fine — every directory there is a single `0` — so M2 acceptance
-  is unaffected. Once we start looking up third-party gem versions in
-  `Repository::lookup`, however, real-world inputs include prerelease and
-  alphanumeric segments (e.g. `1.0.0.beta1`, `2.0.pre`, date-stamped
-  builds). The same input must select the same `best_version` as
-  `Gem::Version` does.
-- **Required changes**:
-  - Replace `segments: Vec<u64>` with a richer representation, e.g.
-    `enum Segment { Num(u64), Str(String) }`.
-  - Implement `correct?` equivalent (`/\A\d+(\.\d+)*([a-zA-Z][0-9a-zA-Z]*)?(\.[0-9a-zA-Z]+)*\z/`).
-  - Implement `release` (drop the trailing string-prefixed tail) and
-    `prerelease?`.
-  - Restore the `unless version.prerelease?` exclusion in `GemRBS::load`
-    so prereleases are filtered explicitly (matches Ruby behavior).
-  - Comparison rules: numeric > string; same-kind segments compare with
-    their natural order; `release` is used before comparing best version.
-- **When**: Before the first M3+ consumer that resolves a third-party gem
-  version through `Repository::lookup`.
-- **Tests**: Add cases mirroring `Gem::Version` ordering for mixed
-  numeric/alphabetic inputs and the exact `find_best_version` examples
-  from `vendor/rbs/lib/rbs/repository.rb`.
-
 ### `NamespaceInterner::intern` allocates on every call
 
 - **Origin**: M2 review.
@@ -204,8 +173,8 @@ belong in this list.
 
 - **Origin**: M3a review.
 - **Where**: `crates/librbs-core/src/` — currently mixed:
-  - `std::collections::HashMap` in `interner.rs`, `env/mod.rs`,
-    `discovery/repository.rs` (predates M3a).
+  - `std::collections::HashMap` in `interner.rs`, `env/mod.rs`
+    (predates M3a).
   - `rustc_hash::FxHashMap` / `FxHashSet` in `resolver/`, `env/use_map.rs`,
     `env/resolution.rs` (added in M3a because the spec required the
     `rustc-hash` dependency).
@@ -219,9 +188,9 @@ belong in this list.
   written, not a deliberate boundary.
 - **Required changes**:
   - Replace `std::collections::HashMap` with `rustc_hash::FxHashMap`
-    (and `HashSet` → `FxHashSet`) across `interner.rs`, `env/mod.rs`,
-    `discovery/repository.rs`. `FxHash*` are drop-in for the API surface
-    we use (`new`/`default`/`insert`/`get`/`entry`/iteration).
+    (and `HashSet` → `FxHashSet`) across `interner.rs` and `env/mod.rs`.
+    `FxHash*` are drop-in for the API surface we use
+    (`new`/`default`/`insert`/`get`/`entry`/iteration).
   - Audit any newly-added module to use `FxHash*` by default unless a
     HashDoS-relevant key is introduced.
 - **When**: Bundle with the M4 benchmarking pass, where we will already

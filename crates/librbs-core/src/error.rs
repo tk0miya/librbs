@@ -16,12 +16,6 @@ pub enum Error {
 
     #[error("duplicated declaration: {name}")]
     DuplicatedDeclaration { name: String },
-
-    #[error("unknown library: {name}")]
-    UnknownLibrary { name: String },
-
-    #[error("{0}")]
-    Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

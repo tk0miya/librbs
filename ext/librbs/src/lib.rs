@@ -66,115 +66,6 @@ fn ivar_set(target: Value, name: &str, value: Value) -> Result<(), Error> {
     obj.ivar_set(name, value)
 }
 
-/// Read `@core_root` from the Ruby loader and convert to a `PathBuf`.
-fn read_core_root(loader: Value) -> Result<Option<PathBuf>, Error> {
-    let v = ivar_get(loader, "@core_root")?;
-    if v.is_nil() {
-        return Ok(None);
-    }
-    // Pathname or String; both respond to `to_s`.
-    let s: String = v.funcall("to_s", ())?;
-    Ok(Some(PathBuf::from(s)))
-}
-
-/// Read `@dirs` (Array<Pathname>) from the Ruby loader.
-fn read_dirs(loader: Value) -> Result<Vec<PathBuf>, Error> {
-    let v = ivar_get(loader, "@dirs")?;
-    if v.is_nil() {
-        return Ok(Vec::new());
-    }
-    let arr = RArray::try_convert(v)?;
-    let mut out = Vec::with_capacity(arr.len());
-    for item in arr.into_iter() {
-        let s: String = item.funcall("to_s", ())?;
-        out.push(PathBuf::from(s));
-    }
-    Ok(out)
-}
-
-/// Read `@libs` (Set<Library>) from the Ruby loader. Each `Library` is a
-/// `Struct.new(:name, :version, keyword_init: true)`.
-///
-/// Libraries sourced from installed gems (e.g. `webrick`, `prism` when
-/// pulled in via an `rbs_collection.lock.yaml` with `type: rubygems`) live
-/// under `Gem::Specification.find_by_name(name).gem_dir + "/sig"`, which
-/// our Rust `Repository` does not know how to find. Mirror upstream's
-/// `EnvironmentLoader.gem_sig_path` here so gem-installed sigs resolve
-/// before the Rust loader's repository fallback runs.
-fn read_libs(loader: Value) -> Result<Vec<(String, Option<String>)>, Error> {
-    let v = ivar_get(loader, "@libs")?;
-    if v.is_nil() {
-        return Ok(Vec::new());
-    }
-    let arr: RArray = v.funcall("to_a", ())?;
-    let mut out = Vec::with_capacity(arr.len());
-    for lib in arr.into_iter() {
-        let name: String = lib.funcall("name", ())?;
-        let version_v: Value = lib.funcall("version", ())?;
-        let version = if version_v.is_nil() {
-            None
-        } else {
-            Some(String::try_convert(version_v)?)
-        };
-        out.push((name, version));
-    }
-    Ok(out)
-}
-
-/// Resolve a `(name, version)` library to its installed gem's `sig/`
-/// directory by calling upstream's `RBS::EnvironmentLoader.gem_sig_path`.
-/// Returns `None` if the library is not provided by an installed gem.
-fn gem_sig_path(name: &str, version: Option<&str>) -> Result<Option<PathBuf>, Error> {
-    let ruby = Ruby::get().expect("Ruby thread");
-    let cls: Value = ruby.eval("RBS::EnvironmentLoader")?;
-    let v_arg: Value = match version {
-        Some(s) => s.into_value_with(&ruby),
-        None => ruby.qnil().as_value(),
-    };
-    let result: Value = cls.funcall("gem_sig_path", (name, v_arg))?;
-    if result.is_nil() {
-        return Ok(None);
-    }
-    // Returns `[Gem::Specification, Pathname]`. We want the path.
-    let arr = RArray::try_convert(result)?;
-    if arr.len() < 2 {
-        return Ok(None);
-    }
-    let path_v: Value = arr.entry(1)?;
-    let s: String = path_v.funcall("to_s", ())?;
-    Ok(Some(PathBuf::from(s)))
-}
-
-/// Read `@repository.dirs` from the Ruby loader.
-fn read_repository_dirs(loader: Value) -> Result<Vec<PathBuf>, Error> {
-    let repo = ivar_get(loader, "@repository")?;
-    if repo.is_nil() {
-        return Ok(Vec::new());
-    }
-    let dirs = ivar_get(repo, "@dirs")?;
-    if dirs.is_nil() {
-        return Ok(Vec::new());
-    }
-    let arr = RArray::try_convert(dirs)?;
-    let mut out = Vec::with_capacity(arr.len());
-    for item in arr.into_iter() {
-        let s: String = item.funcall("to_s", ())?;
-        out.push(PathBuf::from(s));
-    }
-    Ok(out)
-}
-
-/// Mirror `RBS::EnvironmentLoader#load`'s stringio injection: when a
-/// core_root is configured, `stringio` is added to `@libs` if it is not
-/// already present. Replicating it here keeps the patched `from_loader`
-/// (which only proxies to `build_environment`) byte-identical to pure
-/// RBS without forcing the patch layer to reach into the loader.
-fn inject_stringio(core_root: Option<&PathBuf>, libs: &mut Vec<(String, Option<String>)>) {
-    if core_root.is_some() && !libs.iter().any(|(n, _)| n == "stringio") {
-        libs.push(("stringio".to_string(), None));
-    }
-}
-
 /// Read the input env's `@__librbs_handle` ivar and return the raw
 /// Ruby value plus a `*mut Environment` pointing at the Arc-managed
 /// allocation. The pointer is *not* derived from an `Arc::clone` —
@@ -190,7 +81,7 @@ fn extract_env_handle(env_ruby: Value) -> Result<(Value, *mut librbs_core::Envir
     let handle = ivar_get(env_ruby, "@__librbs_handle")?;
     if handle.is_nil() {
         return Err(rb_runtime_err(
-            "RBS::Environment has no @__librbs_handle; it must be built via Librbs::Native.build_environment",
+            "RBS::Environment has no @__librbs_handle; it must be built via Librbs::Native.load_env (the patched RBS::EnvironmentLoader#load)",
         ));
     }
     let wrapped: &WrappedEnvironment = TryConvert::try_convert(handle)?;
@@ -375,47 +266,29 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     Ok(ruby.qnil().as_value())
 }
 
-fn build_environment(loader: Value) -> Result<Value, Error> {
+/// `Librbs::Native.load_env(env, paths)` — invoked from the patched
+/// `RBS::EnvironmentLoader#load`. `paths` is a flat, deduplicated
+/// `Array<Pathname>` of every `.rbs` file the loader would visit;
+/// Ruby handles `each_dir` + `FileFinder.each_file` + dedup. This
+/// function only marshalls the Ruby Array into `Vec<PathBuf>` and
+/// hands it to `librbs_core::Environment::from_paths`, which does
+/// the parallel read + parse + `add_source` work, then attaches the
+/// resulting handle to `env` via `@__librbs_handle`.
+fn load_env(env: Value, paths: RArray) -> Result<Value, Error> {
     let ruby = Ruby::get().expect("Ruby thread");
 
-    let core_root = read_core_root(loader)?;
-    let mut libs = read_libs(loader)?;
-    let dirs = read_dirs(loader)?;
-    let repository_dirs = read_repository_dirs(loader)?;
-    inject_stringio(core_root.as_ref(), &mut libs);
-
-    let mut rust_loader = librbs_core::Loader::new();
-    rust_loader.set_core_root(core_root);
-    for dir in dirs {
-        rust_loader.add_dir(dir);
-    }
-    for dir in repository_dirs {
-        rust_loader.add_repository_dir(dir);
-    }
-    for (name, version) in libs {
-        match gem_sig_path(&name, version.as_deref())? {
-            Some(path) => rust_loader.add_library_with_path(name, version, path),
-            None => rust_loader.add_library(name, version),
-        }
+    let mut files: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    for v in paths.into_iter() {
+        let s: String = v.funcall("to_s", ())?;
+        files.push(PathBuf::from(s));
     }
 
-    let env = librbs_core::Environment::from_loader(&mut rust_loader).map_err(rb_runtime_err)?;
-    let arc = Arc::new(env);
+    let core_env = librbs_core::Environment::from_paths(files).map_err(rb_runtime_err)?;
 
-    // RBS::Environment.allocate, then send(:initialize) so the standard
-    // `@class_decls = {}` etc. ivars exist (avoids `super` crashes when
-    // M3e patches call super on accessor methods). Going through
-    // `allocate` rather than `new` is necessary because we need to
-    // attach `@__librbs_handle` *before* any user code observes the
-    // instance.
-    let rbs_env_class: magnus::RClass = ruby.eval("RBS::Environment")?;
-    let rbs_env: Value = rbs_env_class.obj_alloc()?.as_value();
-    let _: Value = rbs_env.funcall("send", (ruby.to_symbol("initialize"),))?;
+    let wrapped: Value = WrappedEnvironment(Arc::new(core_env)).into_value_with(&ruby);
+    ivar_set(env, "@__librbs_handle", wrapped)?;
 
-    let wrapped: Value = WrappedEnvironment(arc).into_value_with(&ruby);
-    ivar_set(rbs_env, "@__librbs_handle", wrapped)?;
-
-    Ok(rbs_env)
+    Ok(env)
 }
 
 #[magnus::init]
@@ -433,7 +306,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let wrapped_res_class = module.define_class("WrappedResolution", object)?;
     wrapped_res_class.undef_default_alloc_func();
 
-    module.define_singleton_method("build_environment", function!(build_environment, 1))?;
+    module.define_singleton_method("load_env", function!(load_env, 2))?;
     module.define_singleton_method("resolve_type_names", function!(resolve_type_names, 2))?;
     module.define_singleton_method("materialize_all", function!(materialize_all, 1))?;
 

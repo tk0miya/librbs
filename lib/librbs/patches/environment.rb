@@ -3,12 +3,6 @@
 module Librbs
   module Patches
     module Environment
-      module ClassMethods
-        def from_loader(loader)
-          Librbs::Native.build_environment(loader)
-        end
-      end
-
       # `RBS::Environment#resolve_type_names(only: nil)` — replaced by an
       # M3d native call. The Set-of-TypeName form upstream takes is
       # converted to an Array here so the magnus side can iterate it
@@ -71,5 +65,4 @@ module Librbs
   end
 end
 
-RBS::Environment.singleton_class.prepend(Librbs::Patches::Environment::ClassMethods)
 RBS::Environment.prepend(Librbs::Patches::Environment)
