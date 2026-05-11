@@ -1,12 +1,12 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use std::path::PathBuf;
 
 use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub mod insert;
 pub mod resolution;
 pub mod use_map;
 
-use crate::discovery::Loader;
 use crate::error::{Error, Result};
 use crate::interner::{Sym, TypeNameInterner, TypeNameSym};
 use crate::source::Source;
@@ -100,15 +100,19 @@ impl Environment {
         }
     }
 
-    /// Build an environment from a `Loader`. Discovers files, parses them
-    /// in parallel, then inserts entries serially.
-    pub fn from_loader(loader: &mut Loader) -> Result<Self> {
-        let files = loader.discover_files()?;
-
-        // Parallel parse + IO.
-        let sources: Vec<Source> = files
+    /// Build an environment from a flat, already-deduplicated path
+    /// list. Each path is read and parsed in parallel via rayon; the
+    /// resulting `Source`s are inserted serially.
+    ///
+    /// The bridge (`ext/librbs::load_env`) is the production driver:
+    /// Ruby decides *what* to walk (`each_dir` + `FileFinder.each_file`)
+    /// and hands the result here. Keeping the parallel orchestration
+    /// in librbs-core (rather than at the magnus boundary) lets the
+    /// bridge stay a thin marshalling layer.
+    pub fn from_paths(paths: Vec<PathBuf>) -> Result<Self> {
+        let sources: Vec<Source> = paths
             .into_par_iter()
-            .map(|(tag, path)| -> Result<Source> {
+            .map(|path| -> Result<Source> {
                 let content = std::fs::read_to_string(&path).map_err(|e| Error::Io {
                     path: path.clone(),
                     source: e,
@@ -118,16 +122,15 @@ impl Environment {
                     .strip_prefix('\u{FEFF}')
                     .map(|s| s.to_string())
                     .unwrap_or(content);
-                Source::new(tag, path.clone(), content)
-                    .map_err(|message| Error::Parse { path, message })
+                Source::new(path.clone(), content).map_err(|message| Error::Parse { path, message })
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut env = Environment::new();
-        for src in sources.iter() {
+        let mut env = Self::new();
+        for src in sources {
             insert::insert_rbs_source(&mut env, src.parser.signature())?;
+            env.sources.push(src);
         }
-        env.sources = sources;
         Ok(env)
     }
 }

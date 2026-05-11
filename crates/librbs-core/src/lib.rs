@@ -1,12 +1,10 @@
 pub mod arena;
-pub mod discovery;
 pub mod env;
 pub mod error;
 pub mod interner;
 pub mod resolver;
 pub mod source;
 
-pub use discovery::{Loader, Repository, SourceTag};
 pub use env::Environment;
 pub use error::{Error, Result};
 pub use source::Source;

@@ -8,7 +8,6 @@ publish = false
 ruby-rbs = "0.3"
 rayon = "1.10"
 rustc-hash = "2"
-walkdir = "2.5"
 thiserror = "2"
 
 [dev-dependencies]

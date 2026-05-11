@@ -3,8 +3,6 @@ use std::path::PathBuf;
 
 use ruby_rbs::node::SignatureNode;
 
-use crate::discovery::SourceTag;
-
 /// A buffer holding the file path and its content.
 ///
 /// The Ruby counterpart (`RBS::Buffer`) also tracks per-line ranges and
@@ -85,20 +83,15 @@ impl std::fmt::Debug for ManagedParser {
 /// A parsed RBS source file, equivalent to `Source::RBS` in Ruby.
 #[derive(Debug)]
 pub struct Source {
-    pub tag: SourceTag,
     pub buffer: Buffer,
     pub parser: ManagedParser,
 }
 
 impl Source {
-    pub fn new(tag: SourceTag, path: PathBuf, content: String) -> Result<Self, String> {
+    pub fn new(path: PathBuf, content: String) -> Result<Self, String> {
         let parser = ManagedParser::parse(content.clone())?;
         let buffer = Buffer::new(path, content);
-        Ok(Self {
-            tag,
-            buffer,
-            parser,
-        })
+        Ok(Self { buffer, parser })
     }
 }
 
