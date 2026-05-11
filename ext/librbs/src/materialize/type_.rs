@@ -149,29 +149,49 @@ fn set_ivar(obj: Value, id: Id, value: Value) -> Result<(), Error> {
 /// internal layout stays a plain object with a `@location` ivar.
 /// If that ever changes upstream, `bases_only` and [`any_type`] are
 /// the two call sites to revisit.
+///
+/// Gated at runtime by `LIBRBS_FAST_ALLOC`
+/// (see [`crate::materialize::fast_alloc_env`]). When disabled, falls
+/// back to the kwargs `new_instance` path that mirrors upstream
+/// `Class#new(location:)` exactly.
 fn bases_only(
     ctx: &mut MaterializeCtx<'_>,
     node: &Node<'_>,
     class: magnus::RClass,
 ) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    let obj = class.obj_alloc()?.as_value();
-    set_ivar(obj, ctx.common.ivar_location, loc)?;
-    Ok(obj)
+    if ctx.fast_alloc {
+        let obj = class.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        Ok(obj)
+    } else {
+        Ok(class
+            .new_instance((kwargs!("location" => loc),))?
+            .as_value())
+    }
 }
 
 fn any_type(ctx: &mut MaterializeCtx<'_>, node: &AnyTypeNode<'_>) -> Result<Value, Error> {
     let loc = make_location(ctx, &node.location())?;
-    let obj = ctx.classes.types_bases_any.obj_alloc()?.as_value();
-    set_ivar(obj, ctx.common.ivar_location, loc)?;
-    // Mirrors `RBS::Types::Bases::Any#initialize`: only set `@string`
-    // when `todo: true`. Reading an unset ivar from Ruby returns `nil`,
-    // which is exactly what `to_s` falls back to.
-    if node.todo() {
-        let s: Value = "__todo__".into_value_with(ctx.ruby);
-        set_ivar(obj, ctx.common.ivar_string, s)?;
+    if ctx.fast_alloc {
+        let obj = ctx.classes.types_bases_any.obj_alloc()?.as_value();
+        set_ivar(obj, ctx.common.ivar_location, loc)?;
+        // Mirrors `RBS::Types::Bases::Any#initialize`: only set `@string`
+        // when `todo: true`. Reading an unset ivar from Ruby returns `nil`,
+        // which is exactly what `to_s` falls back to.
+        if node.todo() {
+            let s: Value = "__todo__".into_value_with(ctx.ruby);
+            set_ivar(obj, ctx.common.ivar_string, s)?;
+        }
+        Ok(obj)
+    } else {
+        let todo = node.todo();
+        Ok(ctx
+            .classes
+            .types_bases_any
+            .new_instance((kwargs!("location" => loc, "todo" => todo),))?
+            .as_value())
     }
-    Ok(obj)
 }
 
 fn variable_type(
