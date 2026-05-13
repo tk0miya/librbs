@@ -1,6 +1,7 @@
 pub mod env;
 pub mod error;
 pub mod interner;
+pub mod node_kind;
 pub mod resolver;
 pub mod source;
 

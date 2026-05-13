@@ -447,17 +447,12 @@ fn insert_decl(
 /// and member materialization. Keeping these in lock-step requires a
 /// single definition, which is here.
 pub fn is_decl_node(n: &Node<'_>) -> bool {
-    matches!(
-        n,
-        Node::Class(_)
-            | Node::Module(_)
-            | Node::Interface(_)
-            | Node::TypeAlias(_)
-            | Node::Constant(_)
-            | Node::Global(_)
-            | Node::ClassAlias(_)
-            | Node::ModuleAlias(_)
-    )
+    // Goes through `DeclKind::from_node` so the set of decl variants is
+    // defined in exactly one place. A future `ruby-rbs` bump that adds a
+    // decl variant fails to build at `classify_node` until it is wired
+    // into `DeclKind` — at which point this predicate picks it up
+    // automatically.
+    crate::node_kind::DeclKind::from_node(n).is_some()
 }
 
 #[cfg(test)]
