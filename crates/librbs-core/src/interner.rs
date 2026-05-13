@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Interned string symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,7 +36,7 @@ impl TypeNameKind {
 
 #[derive(Debug, Default, Clone)]
 pub struct SymbolInterner {
-    map: HashMap<String, Sym>,
+    map: FxHashMap<String, Sym>,
     rev: Vec<String>,
 }
 
@@ -78,7 +78,7 @@ impl SymbolInterner {
 
 #[derive(Debug, Default, Clone)]
 pub struct NamespaceInterner {
-    map: HashMap<(Vec<Sym>, bool), NamespaceSym>,
+    map: FxHashMap<(Vec<Sym>, bool), NamespaceSym>,
     rev: Vec<(Vec<Sym>, bool)>,
 }
 
@@ -106,9 +106,9 @@ impl NamespaceInterner {
     }
 
     /// Intern a namespace from a borrowed slice. Allocates one `Vec<Sym>`
-    /// per call (even on hit) because the `HashMap` key is owned. If
-    /// profiling later shows this is hot, switch to `hashbrown`'s
-    /// `raw_entry` API to avoid the allocation on hit.
+    /// per call (even on hit) because the map key is owned. If profiling
+    /// later shows this is hot, switch to `hashbrown`'s `raw_entry` API
+    /// to avoid the allocation on hit.
     pub fn intern(&mut self, path: &[Sym], absolute: bool) -> NamespaceSym {
         self.intern_owned(path.to_vec(), absolute)
     }
@@ -229,7 +229,7 @@ impl NamespaceInterner {
 pub struct TypeNameInterner {
     pub symbols: SymbolInterner,
     pub namespaces: NamespaceInterner,
-    map: HashMap<(NamespaceSym, Sym, TypeNameKind), TypeNameSym>,
+    map: FxHashMap<(NamespaceSym, Sym, TypeNameKind), TypeNameSym>,
     rev: Vec<(NamespaceSym, Sym, TypeNameKind)>,
 }
 
@@ -238,7 +238,7 @@ impl TypeNameInterner {
         Self {
             symbols: SymbolInterner::new(),
             namespaces: NamespaceInterner::new(),
-            map: HashMap::new(),
+            map: FxHashMap::default(),
             rev: Vec::new(),
         }
     }
