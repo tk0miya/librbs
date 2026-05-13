@@ -101,35 +101,6 @@ belong in this list.
 - **When**: After we have benchmark numbers (M4) and only if this surfaces
   as a hotspot.
 
-### `HashMap` vs `FxHashMap` inconsistency
-
-- **Origin**: M3a review.
-- **Where**: `crates/librbs-core/src/` — currently mixed:
-  - `std::collections::HashMap` in `interner.rs`, `env/mod.rs`
-    (predates M3a).
-  - `rustc_hash::FxHashMap` / `FxHashSet` in `resolver/`, `env/use_map.rs`,
-    `env/resolution.rs` (added in M3a because the spec required the
-    `rustc-hash` dependency).
-- **What**: Every hash key in `librbs-core` today is internally generated
-  by the parser/interner (`TypeNameSym`, `Sym`, `(NamespaceSym, Sym,
-  kind)`, gem-name strings). None of them are part of a HashDoS threat
-  model, so the SipHash default in `std::HashMap` is paying for nothing.
-  Switching the remaining sites to `FxHashMap` would be a uniform speed
-  win and remove the cognitive overhead of "why this one and not that
-  one". The split today is purely an artifact of when each module was
-  written, not a deliberate boundary.
-- **Required changes**:
-  - Replace `std::collections::HashMap` with `rustc_hash::FxHashMap`
-    (and `HashSet` → `FxHashSet`) across `interner.rs` and `env/mod.rs`.
-    `FxHash*` are drop-in for the API surface we use
-    (`new`/`default`/`insert`/`get`/`entry`/iteration).
-  - Audit any newly-added module to use `FxHash*` by default unless a
-    HashDoS-relevant key is introduced.
-- **When**: Bundle with the M4 benchmarking pass, where we will already
-  be looking at hot paths and can confirm the swap helps in practice.
-  Don't do it as a standalone PR before then — the change is mechanical
-  but touches enough sites to be noisy in review.
-
 ### Rust-side `canonical_dump` implementation (frozen)
 
 - **Origin**: M3b review, refrozen during M3c.
