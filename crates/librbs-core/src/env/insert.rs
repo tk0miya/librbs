@@ -24,10 +24,10 @@ pub fn insert_rbs_source(env: &mut Environment, signature: &SignatureNode<'_>) -
 }
 
 /// Convert a parsed `TypeNameNode` into a [`TypeNameSym`] by interning
-/// every segment and the leaf name through `interner`. Both the M2
-/// insert pass (entry registration) and the M3b resolver driver
-/// (recording type-name occurrences) need to perform exactly this
-/// translation, so the shared definition lives here.
+/// every segment and the leaf name through `interner`. Both the insert
+/// pass (entry registration) and the resolver driver (recording
+/// type-name occurrences) need to perform exactly this translation, so
+/// the shared definition lives here.
 pub(crate) fn intern_type_name_node(
     interner: &mut TypeNameInterner,
     node: &TypeNameNode<'_>,
@@ -442,7 +442,7 @@ fn insert_decl(
 /// in `Environment::decls` (or `global_decls` for `Global`);
 /// `resolver::driver` recurses through the same set when traversing
 /// class/module bodies; `canonical` emits one fragment per such node;
-/// M3h's materializer (in the `ext/librbs` crate) likewise uses it to
+/// the materializer (in the `ext/librbs` crate) likewise uses it to
 /// dispatch class/module member walks between nested-decl recursion
 /// and member materialization. Keeping these in lock-step requires a
 /// single definition, which is here.

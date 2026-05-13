@@ -5,12 +5,12 @@ require "rbs"
 
 require_relative "without_librbs"
 
-# M3j oracle: print materialization-produced AST through `RBS::Writer`
-# (non-preserve mode) and use the resulting string as the comparison
-# point. Stronger than `is_a?` chains for unit specs (it pins down
-# every printed field) and stronger than `to_json` for compat specs
-# (it renders the user-visible RBS syntax we actually care about
-# staying compatible with).
+# Writer-based oracle: print materialization-produced AST through
+# `RBS::Writer` (non-preserve mode) and use the resulting string as
+# the comparison point. Stronger than `is_a?` chains for unit specs
+# (it pins down every printed field) and stronger than `to_json` for
+# compat specs (it renders the user-visible RBS syntax we actually
+# care about staying compatible with).
 #
 # Centralizing `RBS::Writer.new` here keeps the non-preserve invariant
 # explicit. `Writer#write_loc_source` reads `loc.source` from the

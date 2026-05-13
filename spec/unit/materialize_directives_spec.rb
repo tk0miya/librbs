@@ -4,7 +4,7 @@ require "rbs"
 
 require_relative "../support/inline_env"
 
-# M3k Y1: directive materialiser. Verifies that
+# Directive materialiser. Verifies that
 # `RBS::Source::RBS#directives` exposes `Use` (with single / wildcard
 # clauses) and `ResolveTypeNames` instances mirroring upstream's
 # parser + magic-comment scanner.

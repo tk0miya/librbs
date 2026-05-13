@@ -1,7 +1,7 @@
-//! M3b integration tests: resolution driver.
+//! Integration tests for the resolution driver.
 //!
 //! Each test builds a small `Environment` from an inline RBS source and
-//! exercises one slice of the M3b acceptance criteria:
+//! exercises one slice of the resolver:
 //!
 //! * the per-`DeclRef` `Vec<ResolvedRef>` slice contains the expected
 //!   resolution outcomes in pre-order;
@@ -10,7 +10,7 @@
 //!
 //! Canonical-dump fixtures are intentionally absent: the Rust-side
 //! `canonical_dump` was deferred to a followup. Compatibility checks
-//! happen on the Ruby side from M3c onward.
+//! happen on the Ruby side.
 
 use std::path::PathBuf;
 use std::sync::Arc;

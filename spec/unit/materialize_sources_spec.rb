@@ -4,10 +4,10 @@ require "rbs"
 
 require_relative "../support/inline_env"
 
-# M3k Y2: `Environment#sources` / `#declarations` / `each_*_source`
-# parity with upstream. After materialisation, each Rust source must
-# surface as a `Source::RBS` whose decls share Ruby object identity
-# with the matching `*_decls` entry — at every nesting level.
+# `Environment#sources` / `#declarations` / `each_*_source` parity
+# with upstream. After materialisation, each Rust source must surface
+# as a `Source::RBS` whose decls share Ruby object identity with the
+# matching `*_decls` entry — at every nesting level.
 RSpec.describe "Librbs::Native materialize/source parity" do
   it "exposes one Source::RBS per source via #sources" do
     Librbs::SpecSupport.with_inline_env("class A end\n") do |env|

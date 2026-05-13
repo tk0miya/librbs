@@ -3,7 +3,7 @@
 require_relative "../support/canonical_dump"
 require_relative "../support/without_librbs"
 
-# M3i: extend the canonical-dump compatibility net beyond pure core to
+# Extend the canonical-dump compatibility net beyond pure core to
 # core + every stdlib library shipped under `vendor/rbs/stdlib`. The
 # loader's `add(library:)` is the single entry point we exercise here;
 # anything that materializes for the full stdlib set must round-trip

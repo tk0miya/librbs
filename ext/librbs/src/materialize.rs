@@ -1,12 +1,7 @@
 //! Per-source materialization plumbing: cached Ruby class refs, lazy
-//! `RBS::Buffer`, and the per-decl resolution cursor that lets later
-//! slices pull `ResolvedRef`s from the [`Resolution`] side-table in
-//! lockstep with the AST walk M3f–M3h will write.
-//!
-//! M3e wires only the plumbing — `MaterializeCtx` is constructed by the
-//! temporary `_materialize_*` test entries and by the future
-//! `materialize_all` cut-over (M3h). The actual per-node materialization
-//! (types, members, decls) lands in M3f / M3g / M3h.
+//! `RBS::Buffer`, and the per-decl resolution cursor that lets the AST
+//! walk pull `ResolvedRef`s from the [`Resolution`] side-table in
+//! lockstep with each declaration.
 
 use std::cell::RefCell;
 use std::ffi::c_char;
@@ -35,8 +30,8 @@ pub mod type_param;
 
 /// Pre-resolved Ruby class refs used during materialization. Looking
 /// these up once per [`MaterializeCtx`] avoids per-node `ruby.eval`s on
-/// hot paths (M3f–M3h will instantiate `RBS::TypeName` / `RBS::Types::*`
-/// / `RBS::AST::Members::*` hundreds of thousands of times for stdlib).
+/// hot paths (`RBS::TypeName` / `RBS::Types::*` / `RBS::AST::Members::*`
+/// are instantiated hundreds of thousands of times for stdlib).
 #[derive(Clone, Copy)]
 pub struct ClassRefs {
     pub type_name: RClass,
@@ -347,10 +342,9 @@ impl ClassRefs {
 /// recorded in.
 pub struct MaterializeCtx<'a> {
     /// `&Ruby` is held so helpers (`type_name.rs`, `location.rs`) can
-    /// allocate Ruby objects without re-acquiring the GVL handle. M3e
-    /// callers reach for it; the field looks unused in M3e foundations
-    /// because most helpers consume it through method calls on the
-    /// `classes` ref instead.
+    /// allocate Ruby objects without re-acquiring the GVL handle. Most
+    /// helpers consume it through method calls on the `classes` ref
+    /// instead, so the field can look unused at first glance.
     #[allow(dead_code)]
     pub ruby: &'a Ruby,
     pub env: &'a Environment,
@@ -668,9 +662,9 @@ impl<'a> MaterializeCtx<'a> {
     ///   has no slice recorded in `Resolution`, or
     /// - the slice is exhausted — which only happens when the
     ///   materializer's walk over-shoots the resolver's, i.e. a parity
-    ///   bug between this module's walker (M3f–M3h) and
-    ///   `resolver::driver`. M3h's canonical-dump compat tests are the
-    ///   end-to-end regression guard.
+    ///   bug between this module's walker and `resolver::driver`. The
+    ///   canonical-dump compat tests are the end-to-end regression
+    ///   guard.
     pub fn pull_resolution(&mut self) -> Option<ResolvedRef> {
         let slice = self.current_resolutions?;
         let r = slice.get(self.cursor).copied()?;

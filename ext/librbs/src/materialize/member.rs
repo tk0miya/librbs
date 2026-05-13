@@ -1,7 +1,7 @@
-//! M3g: build `RBS::AST::Members::*` instances from `ruby_rbs::node`
-//! member nodes. Annotation and Comment helpers (`build_annotation`,
+//! Build `RBS::AST::Members::*` instances from `ruby_rbs::node` member
+//! nodes. Annotation and Comment helpers (`build_annotation`,
 //! `build_annotations`, `build_comment`) live here too — declarations
-//! pull on them in M3h.
+//! pull on them at materialization time.
 //!
 //! [`materialize_member`] dispatch mirrors
 //! `crates/librbs-core/src/resolver/driver.rs::walk_member` so the two
@@ -122,7 +122,7 @@ pub fn materialize_member(ctx: &mut MaterializeCtx<'_>, node: &Node<'_>) -> Resu
     }
 }
 
-// ---------- Annotation / Comment (re-exported for M3h decls) ----------
+// ---------- Annotation / Comment (re-exported for decls) ----------
 
 /// `RBS::AST::Annotation.new(string:, location:)`.
 pub fn build_annotation(

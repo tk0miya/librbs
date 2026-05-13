@@ -5,19 +5,16 @@ require "rbs"
 require_relative "../support/inline_env"
 require_relative "../support/without_librbs"
 
-# M3e plumbing for `RBS::Location` materialization. Writer-based
-# golden specs (M3j) intentionally run in non-preserve mode and so
-# never read `loc.source`; they cannot catch a regression in the
+# Plumbing for `RBS::Location` materialization. The Writer-based
+# golden specs intentionally run in non-preserve mode and so never
+# read `loc.source`; they cannot catch a regression in the
 # byte-vs-character offsets, an off-by-one in a child range, or a
 # `RBS::Buffer` identity slip across decls of the same source. This
 # file owns those invariants.
 #
-# This is the M3j-era replacement for the harness-coupled
-# `_materialize_first_decl_location` /
-# `_materialize_all_decl_locations` test entries that M3h removed:
-# instead of reaching into a private singleton method, the spec
-# observes locations through the public `RBS::Environment` accessor
-# path (`class_decls -> ClassEntry#each_decl -> decl.location`).
+# The spec observes locations through the public `RBS::Environment`
+# accessor path
+# (`class_decls -> ClassEntry#each_decl -> decl.location`).
 RSpec.describe "Librbs::Native materialize/location plumbing" do
   it "produces start_line/start_column for an ASCII source" do
     Librbs::SpecSupport.with_inline_env("class Foo\nend\n") do |env|
@@ -46,8 +43,7 @@ RSpec.describe "Librbs::Native materialize/location plumbing" do
 
       # Cross-check against a pure-RBS subprocess: pure RBS reading the
       # same fixture must agree on (start_line, start_column) for the
-      # `class Foo` declaration. The regression contract from the
-      # original M3e acceptance.
+      # `class Foo` declaration.
       pure = without_librbs(<<~RUBY)
         require "rbs"
         loader = RBS::EnvironmentLoader.new(core_root: nil)

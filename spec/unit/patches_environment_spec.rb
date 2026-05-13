@@ -2,10 +2,10 @@
 
 require "rbs"
 
-# M3i patch-hardening: pure-Ruby `RBS::Environment.new` instances have
-# no `@__librbs_handle` and must continue to work through the patched
-# accessors. The patches' `instance_variable_defined?` guard is what
-# preserves that fallback — assert here that the guard holds and that
+# Pure-Ruby `RBS::Environment.new` instances have no `@__librbs_handle`
+# and must continue to work through the patched accessors. The patches'
+# `instance_variable_defined?` guard is what preserves that fallback —
+# assert here that the guard holds and that
 # `Librbs::Native.materialize_all` is never reached on this path.
 RSpec.describe "Librbs::Patches::Environment fallback" do
   it "does not call into native materialization for a pure-Ruby env" do

@@ -4,9 +4,9 @@
 //! declaration, the resolved (or unresolved) target is pushed onto a
 //! `Vec<ResolvedRef>` keyed by that declaration's [`DeclRef`]. The
 //! per-decl ordering matches the resolver's pre-order walk — the same
-//! order the materializer (M3f–M3h) walks each decl's subtree — so the
-//! materializer can consume resolutions one-by-one as it encounters
-//! type-name nodes, without needing a positional ID on each AST node.
+//! order the materializer walks each decl's subtree — so the materializer
+//! can consume resolutions one-by-one as it encounters type-name nodes,
+//! without needing a positional ID on each AST node.
 //!
 //! This replaces the earlier `(source_index, serial)`-keyed `NodeId`
 //! scheme: keying on `DeclRef` lets the resolver and the materializer

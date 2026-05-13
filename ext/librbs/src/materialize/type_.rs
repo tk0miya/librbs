@@ -1,4 +1,4 @@
-//! M3f: build `RBS::Types::*` instances from `ruby_rbs::node` type nodes.
+//! Build `RBS::Types::*` instances from `ruby_rbs::node` type nodes.
 //!
 //! [`materialize_type`] is the dispatch entry point. Every arm mirrors
 //! one variant in `crates/librbs-core/src/resolver/driver.rs::walk_type`

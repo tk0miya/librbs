@@ -3,11 +3,11 @@
 require_relative "../support/canonical_dump"
 require_relative "../support/without_librbs"
 
-# M3i: per-gem canonical-dump compatibility for the major gems we
-# expect downstream tools to load on top of core. Each gem runs
-# independently against pure RBS in a fresh subprocess; if the
-# library isn't installed in this RBS distribution the example is
-# marked `pending` rather than failing the suite.
+# Per-gem canonical-dump compatibility for the major gems we expect
+# downstream tools to load on top of core. Each gem runs independently
+# against pure RBS in a fresh subprocess; if the library isn't
+# installed in this RBS distribution the example is marked `pending`
+# rather than failing the suite.
 RSpec.describe "canonical_dump compatibility (gems)" do
   GEM_LIBRARIES = %w[json set bigdecimal csv pathname tempfile time uri].freeze
 
