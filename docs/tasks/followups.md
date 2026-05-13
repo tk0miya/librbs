@@ -154,7 +154,7 @@ belong in this list.
 - **Required changes** (when triggered):
   - Promote the format-shape comment in `spec/support/canonical_dump.rb`
     into a written cross-language spec (likely
-    `docs/tasks/milestones/M3/CANONICAL_FORMAT.md`) so Rust and Ruby
+    `docs/CANONICAL_FORMAT.md`) so Rust and Ruby
     cannot drift silently.
   - Add `crates/librbs-core/src/canonical.rs` whose output is
     byte-identical to the Ruby helper for the same logical
@@ -224,19 +224,27 @@ belong in this list.
   `crates/librbs-core/src/env/use_map.rs`,
   `crates/librbs-core/src/resolver/driver.rs`.
 - **What**: As of the read-only-resolver change, the resolver and the
-  driver's AST walk both run against `&TypeNameInterner` only. The one
-  remaining write site during resolve is `UseMap::resolve_opt`: when a
-  relative name's head segment is mapped by a `# use` directive, it
-  rewrites `Bar::Baz` into `::Foo::Bar::Baz` and interns the rewritten
-  namespace and `TypeNameSym`. The rewritten form is not necessarily
-  literal in any source, so insert's literal-only pre-intern walk does
-  not cover it; we still hold `&mut TypeNameInterner` across the call
-  even though every other operation in the walk is read-only. That
-  blocks per-source `par_iter` over the resolve loop.
+  driver's AST walk both run against `&TypeNameInterner` only. Two
+  write sites during resolve still hold `&mut TypeNameInterner`:
+  - `apply_use_directive` (in `resolver/driver.rs`) interns each
+    `# use ...` clause target as it registers it in the per-source
+    `UseMap`. The clause targets are literal in the source, so
+    extending insert's pre-intern walk to cover `# use` directives
+    closes this site.
+  - `UseMap::resolve_opt` (in `env/use_map.rs`) rewrites a relative
+    name like `Bar::Baz` into `::Foo::Bar::Baz` when the head segment
+    is mapped by `# use`, and interns the rewritten namespace and
+    `TypeNameSym`. The rewritten form is not necessarily literal in
+    any source, so insert's literal-only pre-intern walk does not
+    cover it today.
+
+  Either remaining `&mut` blocks per-source `par_iter` over the
+  resolve loop.
 - **Required changes**:
   - Split `env::insert::insert_rbs_source` into three passes:
     1. Walk every source's declarations and register them (today's
-       behavior).
+       behavior); also pre-intern `# use ...` clause targets so
+       `apply_use_directive` can drop its `&mut interner`.
     2. After all sources are inserted, build the global
        `use_map::Table` (`populate_from` + `compute_children`).
     3. Walk every source's signatures again with a per-source
@@ -249,6 +257,8 @@ belong in this list.
     With pass 3 above, every successful rewrite is guaranteed to
     have been interned, so `None` from `resolve_opt` correctly means
     "no rewrite applies".
+  - Convert `apply_use_directive` to take `&TypeNameInterner` once
+    pass 1 pre-interns clause targets.
   - Drop the remaining `&mut env.interner` in `record_type_name`;
     the entire driver `WalkCtx` can hold `&TypeNameInterner` and
     the per-source loop can switch to `rayon::par_iter` (with a

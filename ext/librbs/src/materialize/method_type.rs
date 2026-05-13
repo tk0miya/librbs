@@ -1,5 +1,5 @@
-//! M3g: build `RBS::MethodType` (and the optional `RBS::Types::Block`
-//! it can carry) from `ruby_rbs::node::MethodTypeNode`.
+//! Build `RBS::MethodType` (and the optional `RBS::Types::Block` it can
+//! carry) from `ruby_rbs::node::MethodTypeNode`.
 //!
 //! `materialize_block` lives here rather than in `type_.rs` because
 //! `MethodType#block` and `ProcType#block` both want it, and the proc
@@ -23,8 +23,8 @@ use crate::materialize::type_param::materialize_type_params;
 ///
 /// - location carries `type` (required) and `type_params` (optional)
 ///   sub-locations,
-/// - `type_params` are materialized through M3f's helper and then run
-///   through `RBS::AST::TypeParam.resolve_variables`,
+/// - `type_params` are materialized through the type-param helper and
+///   then run through `RBS::AST::TypeParam.resolve_variables`,
 /// - `type` is required to be a `Function` / `UntypedFunction` from the
 ///   parser's grammar; we route it through `materialize_type` and let
 ///   the dispatch panic if a non-function shape ever arrives,

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Internal canonical dump used by the M3 compatibility specs. Walks an
+# Internal canonical dump used by the compatibility specs. Walks an
 # `RBS::Environment` and emits a deterministic, line-oriented summary of
 # its six `*_decls` tables so two environments can be compared byte for
 # byte. The format is not a public contract — only this file produces

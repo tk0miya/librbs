@@ -5,9 +5,9 @@
 //! - [`materialize_type_name`] is the AST-as-written variant: it
 //!   reflects the interned `(namespace, name)` pair exactly, marking
 //!   the result `absolute!` only when the namespace is itself absolute.
-//!   This is what M3f / M3g / M3h reach for when no resolution lookup
-//!   is needed (e.g. a declaration's own name, which is not recorded in
-//!   the [`Resolution`] table).
+//!   This is what callers reach for when no resolution lookup is needed
+//!   (e.g. a declaration's own name, which is not recorded in the
+//!   [`Resolution`] table).
 //!
 //! - [`materialize_resolved_type_name`] is the resolution-aware variant:
 //!   it pulls the next [`ResolvedRef`] from `MaterializeCtx`'s per-decl

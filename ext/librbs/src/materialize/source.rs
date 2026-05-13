@@ -1,7 +1,7 @@
 //! Build `RBS::Source::RBS` instances from `librbs_core::Source`s.
 //!
-//! M3k cutover (PR Y2): for each source, materialise its buffer,
-//! directives, and top-level decls in pre-order — then assemble a
+//! For each source, materialise its buffer, directives, and top-level
+//! decls in pre-order — then assemble a
 //! `Source::RBS.new(buffer, directives, declarations)`. The
 //! `materialize_all` driver passes each result to upstream
 //! `RBS::Environment#add_source`, which handles `*_decls` indexing

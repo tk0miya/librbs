@@ -21,7 +21,7 @@ use materialize::MaterializeCtx;
 /// `Send + Sync` is required by `magnus::wrap`'s `TypedData` impl.
 /// `Environment` is `Send + Sync` because every component
 /// (`TypeNameInterner`, `Source`, `ManagedParser`) declares or derives
-/// it; the `Arc` makes cloning the handle cheap when M3d / M3e need to
+/// it; the `Arc` makes cloning the handle cheap when callers need to
 /// hand out additional references.
 #[magnus::wrap(class = "Librbs::Native::WrappedEnvironment", free_immediately, size)]
 #[allow(dead_code)]
@@ -34,9 +34,6 @@ impl WrappedEnvironment {
 }
 
 /// Magnus wrapper around `Arc<librbs_core::env::resolution::Resolution>`.
-/// M3c does not yet write `@__librbs_resolution`, but defining the class
-/// here means M3d does not have to perform any registration churn — it
-/// just `wrap`s an `Arc<Resolution>` and assigns the ivar.
 #[magnus::wrap(class = "Librbs::Native::WrappedResolution", free_immediately, size)]
 #[allow(dead_code)]
 struct WrappedResolution(Arc<Resolution>);
@@ -54,7 +51,7 @@ fn rb_runtime_err<E: std::fmt::Display>(e: E) -> Error {
 
 /// Direct `rb_ivar_get` via the `Object` trait. Avoids dispatching
 /// through `instance_variable_get` so the canonical-dump path stays
-/// inside the M3 "no Ruby method calls" invariant. `target` must be a
+/// inside the "no Ruby method calls" invariant. `target` must be a
 /// `T_OBJECT` (this is true of every `RBS::*` instance we touch).
 fn ivar_get(target: Value, name: &str) -> Result<Value, Error> {
     let obj = magnus::RObject::try_convert(target)?;

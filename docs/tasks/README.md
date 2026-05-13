@@ -1,9 +1,9 @@
-# librbs Implementation Plan
+# librbs Outstanding Work
 
-This directory contains the planning documents for **librbs**, a project that
-accelerates the RBS loader using Rust. Implementation will proceed in separate
-sessions, milestone by milestone. Each agent picking up a milestone should read
-this README and the linked documents before starting work.
+This directory tracks the remaining planning work for **librbs**, a project
+that accelerates the RBS loader using Rust. Completed milestones have been
+removed; the design and reference documents now live one level up under
+[../](../).
 
 ## One-line summary
 
@@ -15,25 +15,10 @@ through a Rust-backed implementation. User code is not modified.
 
 | File | Contents |
 |---|---|
-| [design.md](design.md) | Overall design, architectural decisions, and rationale |
-| [reference.md](reference.md) | Locations in `vendor/rbs` to reference |
-| [milestones/M1-skeleton.md](milestones/M1-skeleton.md) | Skeleton setup |
-| [milestones/M2-discovery-and-parse.md](milestones/M2-discovery-and-parse.md) | Parallel file discovery and parsing |
-| [milestones/M3-environment-and-resolver.md](milestones/M3-environment-and-resolver.md) | Side-table resolver and compatibility tests (**main milestone**, split into [M3a–M3i](milestones/M3/README.md)) |
-| [milestones/M4-decision-point.md](milestones/M4-decision-point.md) | Benchmark measurement and next-phase decision |
-| [milestones/M5-incremental.md](milestones/M5-incremental.md) | In-process incremental updates |
-| [followups.md](followups.md) | Items deferred from a milestone, with the trigger that should pull them in |
-
-## Background
-
-- The repository currently contains nothing except `vendor/rbs/` (the upstream
-  RBS gem source, pinned at v4.0.2).
-- The upstream Rust crates (`ruby-rbs`, `ruby-rbs-sys`) already provide a C
-  parser FFI and a Rust AST. We **depend on them as published crates from
-  crates.io**; we never copy or fork them. The mirrored sources at
-  `vendor/rbs/rust/{ruby-rbs,ruby-rbs-sys}/` exist purely for code reading
-  and reference — they are not part of the build graph. Upstream version
-  bumps are made by editing the version constraints in our `Cargo.toml`.
+| [../design.md](../design.md) | Overall design, architectural decisions, and rationale |
+| [../reference.md](../reference.md) | Locations in `vendor/rbs` to reference |
+| [M5-incremental.md](M5-incremental.md) | In-process incremental updates (pending) |
+| [followups.md](followups.md) | Items deferred from a prior milestone, with the trigger that should pull them in |
 
 ## Non-goals
 
@@ -64,16 +49,3 @@ them.
    Numbers from `from_loader` alone are not the basis for decisions.
 4. **Compatibility is verified mechanically via canonical-dump diff**. Any
    deviation should fail tests.
-5. **Use a single lazy boundary first** (full materialization on the first
-   `*_decls` access). Move to a two-tier boundary only after the M4 decision
-   point.
-
-## Pre-flight checklist for agents
-
-Before starting a new milestone:
-
-1. Read this README.
-2. Read [design.md](design.md).
-3. Read the document for the milestone you are picking up.
-4. Consult [reference.md](reference.md) for relevant code in `vendor/rbs`.
-5. Verify with git that the previous milestone's "Acceptance" criteria are met.

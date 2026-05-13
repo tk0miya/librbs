@@ -1,4 +1,4 @@
-//! M3b resolution driver.
+//! Resolution driver.
 //!
 //! Walks every parsed source's AST, calls `TypeNameResolver::resolve` for
 //! every type-name occurrence, and stores the outcome in a [`Resolution`]
@@ -6,20 +6,6 @@
 //! `vendor/rbs/lib/rbs/environment.rb:577-980` line-by-line; transcribed
 //! Ruby ranges appear as `// environment.rb:NNN-NNN` comments above each
 //! Rust counterpart so the reviewer can verify the correspondence.
-//!
-//! Out of M3b scope:
-//! - `rayon` parallelization. The driver's AST walk runs almost
-//!   entirely against `&TypeNameInterner` — every `TypeNameNode`
-//!   inside a declaration was pre-interned by
-//!   `env::insert::insert_rbs_source`. The two remaining `&mut interner`
-//!   sites in resolve are [`apply_use_directive`], which interns each
-//!   `# use ...` clause target as it registers it in the per-source
-//!   `UseMap`, and [`UseMap::resolve`], which constructs a rewritten
-//!   absolute name when a relative name's head is mapped by `# use`.
-//!   A follow-up that pre-interns every use-rewrite (see
-//!   `docs/tasks/followups.md`) would close the second; once both
-//!   close, per-source `par_iter` becomes a one-line change.
-//! - Magnus / Ruby boundary work — that is M3c.
 //!
 //! `walk_*` functions are a one-for-one port of the Ruby `resolve_*`
 //! family. Each Ruby `case decl when ...` branch becomes a Rust match arm
@@ -139,9 +125,9 @@ fn resolve_source(
             // Run the same recursion `walk_declaration` would have, but
             // only perform its counter side effect — keeping
             // `decl_counter` aligned with the materializer's pre-order
-            // even across skips, so M3e materialization can look
-            // resolutions up by `DeclRef` without an off-by-N gap from
-            // `only:` filtering.
+            // even across skips, so materialization can look resolutions
+            // up by `DeclRef` without an off-by-N gap from `only:`
+            // filtering.
             consume_decl_ref(&decl, &mut ctx.decl_counter);
             continue;
         }

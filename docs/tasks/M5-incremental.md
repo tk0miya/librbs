@@ -6,12 +6,11 @@ Enable **minimal re-resolution on file edits** for long-lived processes such
 as LSP servers. When the impact range of an edit cannot be determined
 soundly, fall back to full re-resolution to preserve correctness.
 
-No disk persistence (see non-goals in [../README.md](../README.md)).
+No disk persistence (see non-goals in [README.md](README.md)).
 
 ## Prerequisites
 
-- M4 is complete (M4a included if it was required).
-- Benchmarks confirm the speedup achieved by M3 / M4.
+- Benchmarks confirm the speedup achieved by the prior native-resolution work.
 
 ## Motivation
 

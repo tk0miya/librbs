@@ -2,15 +2,15 @@
 
 require_relative "../support/writer_oracle"
 
-# M3j: per-decl Writer parity for a curated core set. Complements the
-# bulk canonical_dump matrix in `core_spec.rb` /
-# `core_stdlib_spec.rb` / `gems_spec.rb`. Where canonical_dump checks
-# the six tables fill correctly, this spec checks each entry's
-# materialized AST round-trips through `RBS::Writer` to the same
-# user-visible RBS syntax that pure RBS would produce. Resolved
-# variants are where the Writer-based oracle earns its keep — `to_s`
-# on absolute type references shows up in the printed output, and
-# materialization is responsible for keeping them in sync.
+# Per-decl Writer parity for a curated core set. Complements the bulk
+# canonical_dump matrix in `core_spec.rb` / `core_stdlib_spec.rb` /
+# `gems_spec.rb`. Where canonical_dump checks the six tables fill
+# correctly, this spec checks each entry's materialized AST
+# round-trips through `RBS::Writer` to the same user-visible RBS
+# syntax that pure RBS would produce. Resolved variants are where the
+# Writer-based oracle earns its keep — `to_s` on absolute type
+# references shows up in the printed output, and materialization is
+# responsible for keeping them in sync.
 RSpec.describe "RBS::Writer per-decl compatibility (core)" do
   CORE_NAMES = %w[
     ::Object

@@ -5,16 +5,16 @@ require "rbs"
 require_relative "../support/inline_env"
 require_relative "../support/writer_oracle"
 
-# M3h: end-to-end materialization of `RBS::Environment::*Entry` and
-# the six `*_decls` hashes via `Librbs::Native.materialize_all`. Most
+# End-to-end materialization of `RBS::Environment::*Entry` and the
+# six `*_decls` hashes via `Librbs::Native.materialize_all`. Most
 # fine-grained coverage (per-type, per-member byte-equivalence) lives
 # in `spec/compat/canonical_dump_core_spec.rb`; this file pins the
 # materialization invariants the canonical dump alone wouldn't catch
 # (per-decl printed shape, re-entrancy, accessor-triggered build,
 # pure-Ruby env fallback).
 #
-# M3j: the entry-shape examples below assert their post-conditions
-# via `RBS::Writer` golden strings (see `spec/support/writer_oracle.rb`)
+# The entry-shape examples below assert their post-conditions via
+# `RBS::Writer` golden strings (see `spec/support/writer_oracle.rb`)
 # so each `write_decl` branch — Class, Module, Interface, TypeAlias,
 # Constant, Global, ClassAlias, ModuleAlias — is exercised against
 # user-visible RBS syntax rather than `is_a?` chains. Open-class
@@ -159,7 +159,7 @@ RSpec.describe "Librbs::Native.materialize_all" do
     end
   end
 
-  # ----- M3g: AST::Members::* coverage -----
+  # ----- AST::Members::* coverage -----
   #
   # The eight Declarations branches above land each AST::Members
   # variant on the dispatch table only via `MethodDefinition`. The
@@ -256,7 +256,7 @@ RSpec.describe "Librbs::Native.materialize_all" do
     end
   end
 
-  # ----- M3f: Types::* coverage -----
+  # ----- Types::* coverage -----
   #
   # Each example targets one `RBS::Types::*` variant via a type alias
   # body (the simplest carrier: no member layer in between). The
@@ -365,7 +365,7 @@ RSpec.describe "Librbs::Native.materialize_all" do
     end
   end
 
-  # ----- M3f: AST::TypeParam variance / bound / unchecked -----
+  # ----- AST::TypeParam variance / bound / unchecked -----
 
   it "materializes AST::TypeParam variants (variance, bound, unchecked)" do
     src = <<~RBS
@@ -381,7 +381,7 @@ RSpec.describe "Librbs::Native.materialize_all" do
     end
   end
 
-  # ----- M3g: MethodType -----
+  # ----- MethodType -----
 
   it "materializes MethodType with type params, all parameter kinds, and an optional block" do
     src = <<~RBS
@@ -399,7 +399,7 @@ RSpec.describe "Librbs::Native.materialize_all" do
     end
   end
 
-  # ----- M3h: decl-head fields beyond name (super_class, self_types, annotations, comment) -----
+  # ----- decl-head fields beyond name (super_class, self_types, annotations, comment) -----
 
   it "materializes a Class with super_class (plain and generic)" do
     src = <<~RBS

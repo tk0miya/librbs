@@ -1,5 +1,5 @@
-//! M3f: build `RBS::AST::TypeParam` from a `TypeParamNode`. Used by
-//! M3g (method-type `type_params`) and M3h (decl-level `type_params`).
+//! Build `RBS::AST::TypeParam` from a `TypeParamNode`. Used by both
+//! method-type `type_params` and decl-level `type_params`.
 
 use magnus::{Error, RArray, Value, kwargs, prelude::*, value::ReprValue};
 

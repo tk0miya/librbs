@@ -4,8 +4,7 @@
 //! Character offsets come straight from the parser via
 //! `RBSLocationRange::start_char` / `end_char` (the local fork of
 //! ruby-rbs adds these accessors); no byte → char conversion happens
-//! on the Rust side. The prerequisite parser rewrite is what closes
-//! the M2 followup "Byte ↔ character offset bridge for `RBS::Location`".
+//! on the Rust side.
 //!
 //! Sub-location helpers prefer the dlsym FFI path into
 //! `rbs_loc_legacy_add_required_child` /

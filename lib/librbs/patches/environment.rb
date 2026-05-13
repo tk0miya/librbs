@@ -3,12 +3,12 @@
 module Librbs
   module Patches
     module Environment
-      # `RBS::Environment#resolve_type_names(only: nil)` — replaced by an
-      # M3d native call. The Set-of-TypeName form upstream takes is
-      # converted to an Array here so the magnus side can iterate it
-      # using only `RArray` C-API calls (no Ruby method dispatch). When
-      # `only` is `nil` every declaration is resolved, matching the
-      # upstream default.
+      # `RBS::Environment#resolve_type_names(only: nil)` — replaced by a
+      # native call. The Set-of-TypeName form upstream takes is converted
+      # to an Array here so the magnus side can iterate it using only
+      # `RArray` C-API calls (no Ruby method dispatch). When `only` is
+      # `nil` every declaration is resolved, matching the upstream
+      # default.
       #
       # Pure-Ruby `RBS::Environment.new` instances (no `@__librbs_handle`)
       # fall through to upstream. The native path is sound only when the

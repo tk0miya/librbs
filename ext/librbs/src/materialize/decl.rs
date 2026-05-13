@@ -15,8 +15,8 @@
 //! pre-order walk.
 //!
 //! The entry-driven materialiser (`build_entries` / `process_*` /
-//! per-entry wrappers) was retired in M3k Y3 — `add_source` on the
-//! Ruby side now handles `*_decls` indexing.
+//! per-entry wrappers) has been retired — `add_source` on the Ruby
+//! side now handles `*_decls` indexing.
 
 use magnus::{Error, Value, kwargs, prelude::*, value::ReprValue};
 
@@ -591,7 +591,7 @@ fn materialize_nested_decl(
 /// Compute the absolute `TypeNameSym` for a decl's name node by
 /// looking up its pre-interned inner symbol and prepending the parent
 /// namespace via `FrozenInterner::with_prefix`. The combination is
-/// guaranteed to exist because M2 `insert_decl` interned every
+/// guaranteed to exist because `insert_decl` interned every
 /// declaration's full name through the same path.
 fn full_decl_name(
     ctx: &MaterializeCtx<'_>,

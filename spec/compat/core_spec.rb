@@ -7,9 +7,9 @@ require_relative "../support/without_librbs"
 
 # Compatibility check: the Ruby canonical dumper applied to a librbs-built
 # `RBS::Environment` must agree with the same dumper applied to a pure-RBS
-# environment built in a fresh subprocess. End-to-end regression net for
-# the M3h materialization cut-over — covers Locations, TypeNames,
-# member shapes, and decl-level type_params on a real stdlib subset.
+# environment built in a fresh subprocess. End-to-end regression net —
+# covers Locations, TypeNames, member shapes, and decl-level type_params
+# on a real stdlib subset.
 RSpec.describe "canonical_dump compatibility (core)" do
   it "matches between librbs and pure RBS for unresolved core" do
     loader = RBS::EnvironmentLoader.new

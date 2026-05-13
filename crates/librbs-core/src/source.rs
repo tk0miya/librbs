@@ -7,11 +7,10 @@ use ruby_rbs::node::SignatureNode;
 ///
 /// The Ruby counterpart (`RBS::Buffer`) also tracks per-line ranges and
 /// provides `pos_to_loc`/`loc_to_pos` for character-offset based line/column
-/// translation. We deliberately do not mirror that here: in M3 we construct
+/// translation. We deliberately do not mirror that here: we construct
 /// `RBS::Location` with raw position offsets and let the Ruby `RBS::Buffer`
 /// do the line/column work, so the Rust side never needs to materialize line
-/// offsets. See `docs/tasks/followups.md` for the byte ↔ character offset
-/// concern that does need solving in M3.
+/// offsets.
 #[derive(Debug)]
 pub struct Buffer {
     pub name: PathBuf,

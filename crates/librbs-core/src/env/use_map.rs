@@ -6,8 +6,8 @@
 //! resolves relative names to absolute ones using the table.
 //!
 //! The directive-walking code that converts a parsed `# use ...` clause
-//! into [`UseMap::add_single`] / [`UseMap::add_wildcard`] calls is part of
-//! the M3b driver — it lives with the AST traversal.
+//! into [`UseMap::add_single`] / [`UseMap::add_wildcard`] calls lives with
+//! the AST traversal in the resolver driver.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
