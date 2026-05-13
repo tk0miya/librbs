@@ -7,10 +7,6 @@
 //!   resolution outcomes in pre-order;
 //! * `# resolve-type-names: false` short-circuits resolution for that
 //!   source.
-//!
-//! Canonical-dump fixtures are intentionally absent: the Rust-side
-//! `canonical_dump` was deferred to a followup. Compatibility checks
-//! happen on the Ruby side.
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -101,44 +101,6 @@ belong in this list.
 - **When**: After we have benchmark numbers (M4) and only if this surfaces
   as a hotspot.
 
-### Rust-side `canonical_dump` implementation (frozen)
-
-- **Origin**: M3b review, refrozen during M3c.
-- **Where**: `crates/librbs-core/src/canonical.rs` (does not exist).
-  The Ruby-side dumper at `spec/support/canonical_dump.rb` defines
-  the only canonical-dump format we currently produce; its shape is
-  pinned by a top-of-file comment and is otherwise private to the
-  M3 compat specs.
-- **What**: The M3 series originally planned for a Rust-side dumper
-  to keep the lazy-boundary contract intact under compat tests. M3c
-  briefly shipped one, a separate format-spec doc, and a
-  `Librbs::Native.canonical_dump` magnus bridge to drive it. We
-  later reverted all three: the simpler path is to let the Ruby
-  helper walk the env (post-materialization at M3h+) and accept
-  that compat runs trigger materialization. Only the Ruby helper
-  remains; the Rust file, the format-spec doc, and the magnus
-  bridge were removed.
-- **Trigger**: If the Ruby-side dumper's wall-clock time on the core
-  / core+stdlib / gems compat matrix becomes a CI bottleneck, port
-  the dumper back to Rust and reintroduce the magnus bridge so dumps
-  do not force materialization.
-- **Required changes** (when triggered):
-  - Promote the format-shape comment in `spec/support/canonical_dump.rb`
-    into a written cross-language spec (likely
-    `docs/CANONICAL_FORMAT.md`) so Rust and Ruby
-    cannot drift silently.
-  - Add `crates/librbs-core/src/canonical.rs` whose output is
-    byte-identical to the Ruby helper for the same logical
-    environment.
-  - Re-export it via `pub mod canonical;` in `lib.rs`.
-  - Add snapshot fixtures so format drift is caught at the Rust
-    layer, not only at the magnus boundary.
-  - Bridge through magnus (`Librbs::Native.canonical_dump`) so compat
-    specs can call the Rust dumper instead of the Ruby helper.
-- **When**: Only when the Ruby-side dumper's wall-clock time on the
-  full compatibility matrix becomes a CI bottleneck. Don't pre-empt
-  it.
-
 ### Wildcard `_ =>` arms in `resolver/driver.rs` defeat exhaustiveness
 
 - **Origin**: M3b review.
