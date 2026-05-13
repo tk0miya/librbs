@@ -102,7 +102,7 @@ end
 Native implementation:
 
 1. Identify which entries in `env.sources` correspond to the supplied paths.
-2. Build a new env without them (rebuild arena/entries; discard resolution).
+2. Build a new env without them (rebuild entries; discard resolution).
 3. Return a new `RBS::Environment` carrying the new handle.
 
 Initially, **just discard resolution** (so the next `resolve_type_names`

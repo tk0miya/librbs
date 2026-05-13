@@ -44,8 +44,8 @@ itself stays immutable.
 
 ```
 Rust side:
-  arena: bump arena holding AST nodes
-  resolution: HashMap<NodeId, ResolvedTypeName>  ← the side-table
+  sources:    Vec<Source>                          ← AST nodes owned by ruby-rbs's ManagedParser
+  resolution: HashMap<NodeId, ResolvedTypeName>    ← the side-table
 
 Ruby side: no logic changes
   env.resolve_type_names still appears to "return a new env"
@@ -62,9 +62,8 @@ handle".
 
 ```rust
 struct Environment {
-    arena:      Arc<Arena>,                  // AST nodes
     interner:   Arc<TypeNameInterner>,       // (parent_id, segment_id) → Sym
-    sources:    Arc<Vec<Source>>,            // Buffer + decl node references
+    sources:    Arc<Vec<Source>>,            // Buffer + decl node references (AST owned by ruby-rbs ManagedParser)
     entries:    Arc<Entries>,                // integer-keyed class_decls etc.
     resolution: Option<Arc<Resolution>>,     // None: unresolved / Some: resolved
 }
@@ -72,7 +71,7 @@ struct Environment {
 
 `from_loader` returns a handle with `resolution: None`.
 `resolve_type_names` returns a **new handle** with `resolution: Some(...)`
-swapped in (arena, sources, entries are shared via `Arc`, so the actual cost
+swapped in (sources and entries are shared via `Arc`, so the actual cost
 is one handle).
 
 ### 2.3 Hash-consing TypeName
@@ -212,7 +211,6 @@ subtree/scripted approaches later).
 ```
 crates/librbs-core/src/
 ├── lib.rs
-├── arena.rs           # bumpalo-based arena
 ├── interner.rs        # TypeName / Symbol interning
 ├── discovery/
 │   ├── mod.rs
@@ -280,7 +278,6 @@ end
 | Ruby support | 3.2 / 3.3 / 3.4 / 4.0 |
 | Parallelism | `rayon` |
 | Hashing | `rustc-hash` (`FxHashMap`) |
-| Arena | `bumpalo` |
 
 ## 7. CI configuration
 
