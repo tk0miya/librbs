@@ -1,4 +1,3 @@
-pub mod arena;
 pub mod env;
 pub mod error;
 pub mod interner;
