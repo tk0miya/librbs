@@ -58,10 +58,14 @@ RSpec.describe "canonical_dump compatibility (core)" do
     expect(librbs_dump).to eq(pure_dump)
   end
 
-  it "returns a fresh RBS::Environment with shared handle and a resolution side-table" do
-    # Smoke test for the M3d native bridge that does not depend on
-    # materialization. Verifies the documented post-conditions:
-    # `@__librbs_handle` is shared (object identity) and
+  it "returns a fresh RBS::Environment with its own handle and a resolution side-table" do
+    # Smoke test for the native bridge that does not depend on
+    # materialization. Upstream's `resolve_type_names` is a pure
+    # function on `self`; the native path now mirrors that by handing
+    # the resolved env its own `Arc<Environment>` (via
+    # `Environment::fork_for_resolution`) instead of sharing the
+    # source env's. Verifies the post-conditions: the wrapping
+    # `@__librbs_handle` differs by object identity, and
     # `@__librbs_resolution` is populated.
     loader = RBS::EnvironmentLoader.new
     src = RBS::Environment.from_loader(loader)
@@ -70,7 +74,7 @@ RSpec.describe "canonical_dump compatibility (core)" do
     expect(dst).to be_a(RBS::Environment)
     expect(dst).not_to equal(src)
     expect(dst.instance_variable_get(:@__librbs_handle))
-      .to equal(src.instance_variable_get(:@__librbs_handle))
+      .not_to equal(src.instance_variable_get(:@__librbs_handle))
     expect(dst.instance_variable_get(:@__librbs_resolution)).not_to be_nil
   end
 

@@ -67,17 +67,15 @@ fn ivar_set(target: Value, name: &str, value: Value) -> Result<(), Error> {
 }
 
 /// Read the input env's `@__librbs_handle` ivar and return the raw
-/// Ruby value plus a `*mut Environment` pointing at the Arc-managed
-/// allocation. The pointer is *not* derived from an `Arc::clone` —
-/// keeping the strong count at 1 is what makes the unsafe mutation in
-/// [`resolve_type_names`] sound (see the safety comment there).
+/// Ruby value plus an `Arc::clone` of the wrapped `Environment`.
 ///
 /// Errors if the ivar is missing or wraps a foreign type — the
 /// patched API only ever stores a `WrappedEnvironment` under that
 /// name, so a missing handle indicates someone constructed an
-/// `RBS::Environment` outside `from_loader` and tried to call
-/// `resolve_type_names` on it.
-fn extract_env_handle(env_ruby: Value) -> Result<(Value, *mut librbs_core::Environment), Error> {
+/// `RBS::Environment` outside `Librbs::Native.load_env` (the patched
+/// `RBS::EnvironmentLoader#load`) and tried to call into the native
+/// layer on it.
+fn extract_env_handle(env_ruby: Value) -> Result<(Value, Arc<librbs_core::Environment>), Error> {
     let handle = ivar_get(env_ruby, "@__librbs_handle")?;
     if handle.is_nil() {
         return Err(rb_runtime_err(
@@ -85,8 +83,7 @@ fn extract_env_handle(env_ruby: Value) -> Result<(Value, *mut librbs_core::Envir
         ));
     }
     let wrapped: &WrappedEnvironment = TryConvert::try_convert(handle)?;
-    let env_ptr = Arc::as_ptr(wrapped.arc()) as *mut librbs_core::Environment;
-    Ok((handle, env_ptr))
+    Ok((handle, Arc::clone(wrapped.arc())))
 }
 
 /// Convert a `RBS::Namespace` Ruby instance into a `(path, absolute)` pair
@@ -151,51 +148,40 @@ fn convert_only(
 fn resolve_type_names(env_ruby: Value, only: Value) -> Result<Value, Error> {
     let ruby = Ruby::get().expect("Ruby thread");
 
-    let (handle_value, env_ptr) = extract_env_handle(env_ruby)?;
+    let (_handle_value, src_arc) = extract_env_handle(env_ruby)?;
 
-    // Safety: we mutate the `Environment` behind a shared `Arc` via a raw
-    // pointer rather than introducing interior mutability on the type.
-    // This is sound under the following invariants, all of which hold for
-    // the M3 patch-based design:
-    //
-    // 1. The `WrappedEnvironment` we read from `@__librbs_handle` owns
-    //    the *only* `Arc<Environment>` clone for that allocation. No
-    //    other Arc clones exist while we run because `extract_env_handle`
-    //    deliberately does not call `Arc::clone`; it produces a raw
-    //    pointer derived from the wrapped Arc itself. (`from_loader` is
-    //    likewise the sole creator of the Arc.) Strong count is 1.
-    // 2. Ruby's GVL serializes execution. No other Ruby thread can race
-    //    with us, and no Ruby callback runs during `resolve` /
-    //    `resolve_only` — they are pure Rust. The input env's ivar
-    //    therefore cannot be observed in a half-mutated state.
-    // 3. The `&mut Environment` we synthesize is local to this function
-    //    and never escapes. It is dropped before we re-attach
-    //    `handle_value` to the new env via `ivar_set`.
-    //
-    // M3e materialization shipped without disturbing the strong-count-is-1
-    // invariant — `materialize_all` reads `env` through `&` only. The hatch
-    // is closed by the "`resolve_type_names` mutates the source env's
-    // shared core state" followup in `docs/tasks/followups.md`, which
-    // replaces this in-place mutation with an owned clone.
-    let env: &mut librbs_core::Environment = unsafe { &mut *env_ptr };
+    // `Environment::clone` deep-copies the interner and the per-decl
+    // tables and `Arc::clone`s the parsed sources (immutable for the
+    // duration of resolve). The resolver mutates `env.interner` while
+    // walking the AST; on the clone, those mutations land on the new
+    // env only. The source env's `Arc<Environment>` is therefore never
+    // mutated through here — it stays usable, un-resolved, identical
+    // to upstream's `self`-is-unchanged contract for
+    // `RBS::Environment#resolve_type_names`.
+    let mut env: librbs_core::Environment = (*src_arc).clone();
+    // Drop the source Arc as soon as the clone is in hand. Sources stay
+    // alive through the Arc that `Environment::clone` cloned into `env`.
+    drop(src_arc);
 
     let only_set: Option<FxHashSet<TypeNameSym>> = convert_only(&mut env.interner, only)?;
 
-    let resolution = librbs_core::resolver::driver::resolve(env, only_set.as_ref());
+    let resolution = librbs_core::resolver::driver::resolve(&mut env, only_set.as_ref());
 
-    // Allocate a fresh `RBS::Environment`. Pattern matches `build_environment`:
-    // `allocate` + `send(:initialize)` so the upstream `@class_decls = {}`
-    // etc. ivars exist for any future `super` call from the patched
-    // accessors in `lib/librbs/patches/environment.rb`.
+    // Allocate a fresh `RBS::Environment`: `allocate` + `send(:initialize)`
+    // so the upstream `@class_decls = {}` etc. ivars exist for any future
+    // `super` call from the patched accessors in
+    // `lib/librbs/patches/environment.rb`.
     let rbs_env_class: magnus::RClass = ruby.eval("RBS::Environment")?;
     let rbs_env: Value = rbs_env_class.obj_alloc()?.as_value();
     let _: Value = rbs_env.funcall("send", (ruby.to_symbol("initialize"),))?;
 
-    // Reuse the *same* `WrappedEnvironment` Ruby object on the new env so
-    // `dst.@__librbs_handle.equal?(src.@__librbs_handle)` — the documented
-    // "shared Arc<Environment>" invariant from the M3d task spec is
-    // observable via Ruby object identity, not just Arc-target identity.
-    ivar_set(rbs_env, "@__librbs_handle", handle_value)?;
+    // Wrap the forked core env in a *fresh* `WrappedEnvironment` so
+    // `src.@__librbs_handle` and `dst.@__librbs_handle` are no longer
+    // `equal?`. The forked env owns its own `Arc<Environment>`; the
+    // strong count is 1 here, which `materialize_all` still relies on
+    // when it borrows the core env immutably.
+    let dst_wrapped: Value = WrappedEnvironment(Arc::new(env)).into_value_with(&ruby);
+    ivar_set(rbs_env, "@__librbs_handle", dst_wrapped)?;
     let wrapped_res: Value = WrappedResolution::new(resolution).into_value_with(&ruby);
     ivar_set(rbs_env, "@__librbs_resolution", wrapped_res)?;
 
@@ -238,11 +224,8 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
         return Ok(ruby.qnil().as_value());
     }
 
-    let (_handle_value, env_ptr) = extract_env_handle(env_ruby)?;
-    // SAFETY: same as `resolve_type_names` — strong count is 1 on the
-    // wrapped Arc, the GVL serializes Ruby threads, and the borrow
-    // does not escape. We never resize `env.sources` below.
-    let env: &librbs_core::Environment = unsafe { &*env_ptr };
+    let (_handle_value, env_arc) = extract_env_handle(env_ruby)?;
+    let env: &librbs_core::Environment = &env_arc;
     // SAFETY: see `read_resolution_ptr`'s doc — pointer remains valid
     // for the duration of this call because Ruby holds the env (and
     // thus the wrapper Arc) on the stack.
@@ -259,7 +242,7 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
 
     for (index, source) in env.sources.iter().enumerate() {
         let source_value =
-            materialize::source::materialize_source_rbs(&mut ctx, index as u32, source)?;
+            materialize::source::materialize_source_rbs(&mut ctx, index as u32, source.as_ref())?;
         let _: Value = env_ruby.funcall("add_source", (source_value,))?;
     }
 

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -34,7 +35,7 @@ pub type Context = Vec<TypeNameSym>;
 /// `Class`/`Module` distinction upstream RBS makes between
 /// `ClassAlias` and `ModuleAlias` is not consulted here, so a single
 /// struct covers both.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClassAliasEntry {
     pub old_name: TypeNameSym,
     pub context: Context,
@@ -46,7 +47,7 @@ pub struct ClassAliasEntry {
 /// `TypeNameSym` key (which already encodes `TypeNameKind`). Only
 /// `ClassAlias` carries data, and is boxed so the enum stays small
 /// (one word for the tag + one word for the pointer).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DeclEntry {
     Class,
     Module,
@@ -69,10 +70,23 @@ impl DeclEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Environment {
     pub interner: TypeNameInterner,
-    pub sources: Vec<Source>,
+    /// Parsed sources, each held behind an `Arc` so cloning an
+    /// `Environment` doesn't re-parse them. `Source` is not `Clone`
+    /// (its `ManagedParser` carries a `'static` self-borrow into its
+    /// own heap-stable content), so cloning at the *outer* `Vec` is
+    /// fine — `Vec<Arc<Source>>: Clone` because `Arc<Source>: Clone`
+    /// regardless of `Source` — but the inner `Arc<Source>` must
+    /// never be `make_mut`'d for the same reason.
+    ///
+    /// The per-source `Arc` (rather than a single `Arc<Vec<Source>>`
+    /// at the outer level) is what makes `add_source` work after a
+    /// clone: each environment owns its own `Vec` and can `push` a
+    /// new `Arc<Source>` without disturbing its siblings. The
+    /// already-shared `Arc<Source>` entries stay shared and immutable.
+    pub sources: Vec<Arc<Source>>,
     /// All type-name declarations (class, module, interface, type alias,
     /// constant, class/module alias) keyed by their interned absolute
     /// `TypeNameSym`. The variant disambiguates the kind; payload only
@@ -127,9 +141,10 @@ impl Environment {
             .collect::<Result<Vec<_>>>()?;
 
         let mut env = Self::new();
+        env.sources.reserve(sources.len());
         for src in sources {
             insert::insert_rbs_source(&mut env, src.parser.signature())?;
-            env.sources.push(src);
+            env.sources.push(Arc::new(src));
         }
         Ok(env)
     }
