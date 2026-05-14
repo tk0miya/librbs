@@ -26,6 +26,7 @@ use crate::env::resolution::{Resolution, ResolvedRef};
 use crate::env::use_map::{Table, UseMap};
 use crate::env::{Context, DeclRef, Environment};
 use crate::interner::{FrozenInterner, Sym, TypeNameInterner, TypeNameSym};
+use crate::node_kind::{DeclKind, MemberKind, TypeKind, UseClauseKind};
 use crate::resolver::TypeNameResolver;
 use crate::source::Source;
 
@@ -153,15 +154,16 @@ fn resolve_source(
 /// check on the root.
 fn consume_decl_ref(node: &Node<'_>, counter: &mut u32) {
     *counter += 1;
-    match node {
-        Node::Class(c) => {
+    let decl = DeclKind::from_node(node).expect("consume_decl_ref called on non-decl node");
+    match decl {
+        DeclKind::Class(c) => {
             for member in c.members().iter() {
                 if is_decl_node(&member) {
                     consume_decl_ref(&member, counter);
                 }
             }
         }
-        Node::Module(m) => {
+        DeclKind::Module(m) => {
             for member in m.members().iter() {
                 if is_decl_node(&member) {
                     consume_decl_ref(&member, counter);
@@ -171,7 +173,12 @@ fn consume_decl_ref(node: &Node<'_>, counter: &mut u32) {
         // Interface / TypeAlias / Constant / Global / ClassAlias /
         // ModuleAlias have no nested decls — they consume a single
         // counter step and return.
-        _ => {}
+        DeclKind::Interface(_)
+        | DeclKind::TypeAlias(_)
+        | DeclKind::Constant(_)
+        | DeclKind::Global(_)
+        | DeclKind::ClassAlias(_)
+        | DeclKind::ModuleAlias(_) => {}
     }
 }
 
@@ -185,18 +192,18 @@ fn decl_matches_only(
     only: &FxHashSet<TypeNameSym>,
     interner: FrozenInterner<'_>,
 ) -> bool {
-    let name_node = match decl {
-        Node::Class(c) => c.name(),
-        Node::Module(m) => m.name(),
-        Node::Interface(i) => i.name(),
-        Node::TypeAlias(a) => a.name(),
-        Node::Constant(c) => c.name(),
-        Node::ClassAlias(a) => a.new_name(),
-        Node::ModuleAlias(a) => a.new_name(),
+    let kind = DeclKind::from_node(decl).expect("decl_matches_only called on non-decl node");
+    let name_node = match kind {
+        DeclKind::Class(c) => c.name(),
+        DeclKind::Module(m) => m.name(),
+        DeclKind::Interface(i) => i.name(),
+        DeclKind::TypeAlias(a) => a.name(),
+        DeclKind::Constant(c) => c.name(),
+        DeclKind::ClassAlias(a) => a.new_name(),
+        DeclKind::ModuleAlias(a) => a.new_name(),
         // Globals key by `Sym`, never by `TypeNameSym` — they can never
         // be selected by an `only:` set of `TypeName`s. Skip them.
-        Node::Global(_) => return false,
-        _ => return false,
+        DeclKind::Global(_) => return false,
     };
     let Some(inner) = find_type_name_node(interner, &name_node) else {
         return false;
@@ -308,13 +315,17 @@ fn record_type_name(ctx: &mut WalkCtx<'_, '_>, raw: TypeNameSym, context: &Conte
 
 /// Apply one parsed `# use ...` directive to the [`UseMap`]. Mirrors
 /// `UseMap#build_map` (`vendor/rbs/lib/rbs/environment/use_map.rb`),
-/// dispatched on the clause node type from the C parser.
+/// dispatched on the clause node type from the C parser. The match on
+/// the closed [`node_kind::UseClauseKind`] is exhaustive by
+/// construction; the underlying `Node` exhaustiveness lives in
+/// [`node_kind::UseClauseKind::from_node`].
 fn apply_use_directive(u: &UseNode<'_>, map: &mut UseMap<'_>, interner: &mut TypeNameInterner) {
     for clause in u.clauses().iter() {
-        match clause {
-            Node::UseSingleClause(c) => apply_use_single_clause(&c, map, interner),
-            Node::UseWildcardClause(c) => apply_use_wildcard_clause(&c, map, interner),
-            _ => {}
+        let kind = UseClauseKind::from_node(&clause)
+            .expect("apply_use_directive: non-use-clause node from C parser");
+        match kind {
+            UseClauseKind::Single(c) => apply_use_single_clause(c, map, interner),
+            UseClauseKind::Wildcard(c) => apply_use_wildcard_clause(c, map, interner),
         }
     }
 }
@@ -359,27 +370,28 @@ fn apply_use_wildcard_clause(
 fn walk_declaration(ctx: &mut WalkCtx<'_, '_>, decl: &Node<'_>, context: &Context) {
     let decl_ref = ctx.next_decl_ref();
     let prev_decl_ref = ctx.current_decl_ref.replace(decl_ref);
-    match decl {
+    let kind = DeclKind::from_node(decl).expect("walk_declaration called on non-decl node");
+    match kind {
         // environment.rb:578-587 — Global. type only; no rename-to-prefix.
-        Node::Global(g) => {
+        DeclKind::Global(g) => {
             let empty_ctx: Context = Vec::new();
             walk_type(ctx, &g.type_(), &empty_ctx);
         }
         // environment.rb:590-624 — Class.
-        Node::Class(c) => walk_class(ctx, c, context),
+        DeclKind::Class(c) => walk_class(ctx, c, context),
         // environment.rb:626-660 — Module.
-        Node::Module(m) => walk_module(ctx, m, context),
+        DeclKind::Module(m) => walk_module(ctx, m, context),
         // environment.rb:662-672 — Interface.
-        Node::Interface(i) => walk_interface(ctx, i, context),
+        DeclKind::Interface(i) => walk_interface(ctx, i, context),
         // environment.rb:674-682 — TypeAlias.
-        Node::TypeAlias(a) => {
+        DeclKind::TypeAlias(a) => {
             walk_type_params(ctx, &a.type_params(), context);
             walk_type(ctx, &a.type_(), context);
         }
         // environment.rb:684-691 — Constant.
-        Node::Constant(c) => walk_type(ctx, &c.type_(), context),
+        DeclKind::Constant(c) => walk_type(ctx, &c.type_(), context),
         // environment.rb:693-700 — ClassAlias.
-        Node::ClassAlias(a) => {
+        DeclKind::ClassAlias(a) => {
             // new_name carries no resolvable reference (it is the LHS of
             // the alias definition); only old_name is recorded.
             let old = find_type_name_node(ctx.interner.frozen(), &a.old_name())
@@ -387,12 +399,11 @@ fn walk_declaration(ctx: &mut WalkCtx<'_, '_>, decl: &Node<'_>, context: &Contex
             record_type_name(ctx, old, context);
         }
         // environment.rb:702-709 — ModuleAlias.
-        Node::ModuleAlias(a) => {
+        DeclKind::ModuleAlias(a) => {
             let old = find_type_name_node(ctx.interner.frozen(), &a.old_name())
                 .expect("alias old_name pre-interned by insert");
             record_type_name(ctx, old, context);
         }
-        _ => {}
     }
     ctx.current_decl_ref = prev_decl_ref;
 }
@@ -492,30 +503,31 @@ fn full_decl_name(
 /// `resolve_member` — environment.rb:868-966. Each branch corresponds
 /// one-for-one with the upstream `case member when ...`.
 fn walk_member(ctx: &mut WalkCtx<'_, '_>, member: &Node<'_>, context: &Context) {
-    match member {
+    let kind = MemberKind::from_node(member).expect("walk_member called on non-member node");
+    match kind {
         // environment.rb:870-884 — MethodDefinition.
-        Node::MethodDefinition(m) => walk_method_definition(ctx, m, context),
+        MemberKind::MethodDefinition(m) => walk_method_definition(ctx, m, context),
         // environment.rb:885-895 — AttrAccessor.
-        Node::AttrAccessor(a) => walk_attr_accessor(ctx, a, context),
+        MemberKind::AttrAccessor(a) => walk_attr_accessor(ctx, a, context),
         // environment.rb:896-906 — AttrReader.
-        Node::AttrReader(a) => walk_attr_reader(ctx, a, context),
+        MemberKind::AttrReader(a) => walk_attr_reader(ctx, a, context),
         // environment.rb:907-917 — AttrWriter.
-        Node::AttrWriter(a) => walk_attr_writer(ctx, a, context),
+        MemberKind::AttrWriter(a) => walk_attr_writer(ctx, a, context),
         // environment.rb:918-924 — InstanceVariable.
-        Node::InstanceVariable(v) => walk_type(ctx, &v.type_(), context),
+        MemberKind::InstanceVariable(v) => walk_type(ctx, &v.type_(), context),
         // environment.rb:925-931 — ClassInstanceVariable.
-        Node::ClassInstanceVariable(v) => walk_type(ctx, &v.type_(), context),
+        MemberKind::ClassInstanceVariable(v) => walk_type(ctx, &v.type_(), context),
         // environment.rb:932-938 — ClassVariable.
-        Node::ClassVariable(v) => walk_type(ctx, &v.type_(), context),
+        MemberKind::ClassVariable(v) => walk_type(ctx, &v.type_(), context),
         // environment.rb:939-946 — Include.
-        Node::Include(m) => walk_mixin(ctx, &m.name(), m.args().iter(), context),
+        MemberKind::Include(m) => walk_mixin(ctx, &m.name(), m.args().iter(), context),
         // environment.rb:947-954 — Extend.
-        Node::Extend(m) => walk_mixin(ctx, &m.name(), m.args().iter(), context),
+        MemberKind::Extend(m) => walk_mixin(ctx, &m.name(), m.args().iter(), context),
         // environment.rb:955-962 — Prepend.
-        Node::Prepend(m) => walk_mixin(ctx, &m.name(), m.args().iter(), context),
-        // environment.rb:963-965 — fallthrough: Public, Private, Alias
-        // carry no type-name occurrences and are returned unchanged.
-        _ => {}
+        MemberKind::Prepend(m) => walk_mixin(ctx, &m.name(), m.args().iter(), context),
+        // environment.rb:963-965 — Public, Private, Alias carry no
+        // type-name occurrences and are returned unchanged.
+        MemberKind::Public(_) | MemberKind::Private(_) | MemberKind::Alias(_) => {}
     }
 }
 
@@ -610,56 +622,56 @@ fn walk_type_param(ctx: &mut WalkCtx<'_, '_>, tp: &TypeParamNode<'_>, context: &
 /// `absolute_type` / `Types::*#map_type_name` — vendor/rbs/lib/rbs/types.rb.
 /// Each `RBS::Types::*` variant gets its own arm.
 fn walk_type(ctx: &mut WalkCtx<'_, '_>, ty: &Node<'_>, context: &Context) {
-    match ty {
+    let kind = TypeKind::from_node(ty).expect("walk_type called on non-type node");
+    match kind {
         // types.rb: ClassInstance, Interface, Alias have name + args.
-        Node::ClassInstanceType(t) => walk_class_instance_type(ctx, t, context),
-        Node::InterfaceType(t) => walk_interface_type(ctx, t, context),
-        Node::AliasType(t) => walk_alias_type(ctx, t, context),
+        TypeKind::ClassInstance(t) => walk_class_instance_type(ctx, t, context),
+        TypeKind::Interface(t) => walk_interface_type(ctx, t, context),
+        TypeKind::Alias(t) => walk_alias_type(ctx, t, context),
         // types.rb: ClassSingleton has only name.
-        Node::ClassSingletonType(t) => walk_class_singleton_type(ctx, t, context),
+        TypeKind::ClassSingleton(t) => walk_class_singleton_type(ctx, t, context),
         // types.rb: Tuple, Union, Intersection, Record have child types.
-        Node::TupleType(t) => {
+        TypeKind::Tuple(t) => {
             for el in t.types().iter() {
                 walk_type(ctx, &el, context);
             }
         }
-        Node::UnionType(t) => {
+        TypeKind::Union(t) => {
             for el in t.types().iter() {
                 walk_type(ctx, &el, context);
             }
         }
-        Node::IntersectionType(t) => {
+        TypeKind::Intersection(t) => {
             for el in t.types().iter() {
                 walk_type(ctx, &el, context);
             }
         }
-        Node::RecordType(t) => walk_record_type(ctx, t, context),
+        TypeKind::Record(t) => walk_record_type(ctx, t, context),
         // types.rb: Optional wraps a single type.
-        Node::OptionalType(t) => walk_type(ctx, &t.type_(), context),
+        TypeKind::Optional(t) => walk_type(ctx, &t.type_(), context),
         // types.rb: Proc has a function and an optional block.
-        Node::ProcType(t) => walk_proc_type(ctx, t, context),
+        TypeKind::Proc(t) => walk_proc_type(ctx, t, context),
         // types.rb: Function/UntypedFunction — nested under Proc/MethodType.
-        Node::FunctionType(t) => walk_function_type(ctx, t, context),
-        Node::UntypedFunctionType(t) => walk_type(ctx, &t.return_type(), context),
+        TypeKind::Function(t) => walk_function_type(ctx, t, context),
+        TypeKind::UntypedFunction(t) => walk_type(ctx, &t.return_type(), context),
         // types.rb: Literal — child is an Integer/String/Symbol/Bool node;
         // none carry type names.
-        Node::LiteralType(_) => {}
+        TypeKind::Literal(_) => {}
         // types.rb: Variable, Bases::*, Block — nothing to record.
-        Node::VariableType(_) => {}
-        Node::BoolType(_)
-        | Node::VoidType(_)
-        | Node::AnyType(_)
-        | Node::NilType(_)
-        | Node::TopType(_)
-        | Node::BottomType(_)
-        | Node::SelfType(_)
-        | Node::InstanceType(_)
-        | Node::ClassType(_) => {}
-        Node::BlockType(b) => walk_block(ctx, b, context),
+        TypeKind::Variable(_)
+        | TypeKind::Bool(_)
+        | TypeKind::Void(_)
+        | TypeKind::Any(_)
+        | TypeKind::Nil(_)
+        | TypeKind::Top(_)
+        | TypeKind::Bottom(_)
+        | TypeKind::SelfType(_)
+        | TypeKind::Instance(_)
+        | TypeKind::Class(_) => {}
+        TypeKind::Block(b) => walk_block(ctx, b, context),
         // RecordFieldType is reached via walk_record_type; if seen here
         // we still walk its child type for safety.
-        Node::RecordFieldType(f) => walk_type(ctx, &f.type_(), context),
-        _ => {}
+        TypeKind::RecordField(f) => walk_type(ctx, &f.type_(), context),
     }
 }
 
