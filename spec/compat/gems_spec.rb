@@ -14,13 +14,15 @@ RSpec.describe "canonical_dump compatibility (gems)" do
   let(:helper) { File.expand_path("../support/canonical_dump.rb", __dir__) }
 
   # `loader.add(library:)` only records the request — sig discovery
-  # happens later during `each_signature` / `from_loader`. Probe the
-  # latter through upstream's iterator so a missing gem surfaces as
-  # `UnknownLibraryError` here, before the librbs path runs.
+  # happens later during `each_dir` / `from_loader`. Probe through
+  # `each_dir` so a missing gem surfaces as `UnknownLibraryError`
+  # here, before the librbs path runs. (Upstream's `each_signature`
+  # would also work but librbs no longer ships it — see
+  # `lib/librbs/patches/environment_loader.rb`.)
   def gem_available?(name)
     loader = RBS::EnvironmentLoader.new(core_root: nil)
     loader.add(library: name, version: nil)
-    loader.each_signature {} # raise UnknownLibraryError if sigs missing
+    loader.each_dir {} # raise UnknownLibraryError if sigs missing
     true
   rescue RBS::EnvironmentLoader::UnknownLibraryError
     false

@@ -29,9 +29,9 @@ the on-run are within run-to-run jitter).
 
 | ruby   | small (normal / fast) | large (normal / fast)  |
 |--------|-----------------------|------------------------|
-| 3.3.11 | 2.51x / **4.39x**     | 6.09x / **10.60x**     |
-| 3.4.9  | 1.63x / **2.72x**     | 1.38x / **2.35x**      |
-| 4.0.4  | 1.88x / **2.77x**     | 1.21x / **2.60x**      |
+| 3.3.11 | 2.72x / **3.36x**     | 6.30x / **10.87x**     |
+| 3.4.9  | 2.13x / **2.69x**     | 1.43x / **2.37x**      |
+| 4.0.4  | 1.83x / **2.80x**     | 1.25x / **2.72x**      |
 
 Bold cells are the headline speedup for that row.
 
@@ -43,12 +43,12 @@ fully realized Ruby state on both sides.
 
 | ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-------|-----------|-----------------|-----------|---------------------|-----------|
-| 3.3.11 | small |  108.1 ms |         43.1 ms |     2.51x |             22.0 ms |     4.39x |
-| 3.3.11 | large | 2514.5 ms |        413.2 ms |     6.09x |            220.4 ms |    10.60x |
-| 3.4.9  | small |   61.0 ms |         37.3 ms |     1.63x |             22.2 ms |     2.72x |
-| 3.4.9  | large |  470.4 ms |        340.3 ms |     1.38x |            200.7 ms |     2.35x |
-| 4.0.4  | small |   54.6 ms |         29.1 ms |     1.88x |             19.2 ms |     2.77x |
-| 4.0.4  | large |  419.1 ms |        346.5 ms |     1.21x |            153.9 ms |     2.60x |
+| 3.3.11 | small |  110.1 ms |         40.4 ms |     2.72x |             28.9 ms |     3.36x |
+| 3.3.11 | large | 2655.1 ms |        421.5 ms |     6.30x |            219.5 ms |    10.87x |
+| 3.4.9  | small |   76.6 ms |         35.9 ms |     2.13x |             22.2 ms |     2.69x |
+| 3.4.9  | large |  485.6 ms |        338.7 ms |     1.43x |            202.6 ms |     2.37x |
+| 4.0.4  | small |   57.9 ms |         31.6 ms |     1.83x |             18.6 ms |     2.80x |
+| 4.0.4  | large |  417.5 ms |        334.8 ms |     1.25x |            156.6 ms |     2.72x |
 
 ## Cross-Ruby observations
 
@@ -153,6 +153,33 @@ fully realized Ruby state on both sides.
   meaningful payoff. The `gem_sig_path` and `repository.lookup`
   callbacks per lib stay on the Ruby side — funcall overhead is
   sub-µs per call so the ~92 libs on `large` add <0.1 ms total.
+- **`EnvironmentLoader` class replacement (this revision).** The
+  patch on `RBS::EnvironmentLoader#load` was replaced by a full
+  class swap: `Librbs::Patches::EnvironmentLoader` is now
+  `RBS::EnvironmentLoader` (via `RBS.const_set`). The
+  Loader-internal state (`core_root`, `libs`, `dirs`) lives on the
+  Rust side as `Librbs::Native::Loader`; the Ruby facade implements
+  the public surface (`initialize`, `add`, `add_collection`,
+  `load(env:)`, `each_dir`, `core_root`, `libs`, `repository`,
+  `.gem_sig_path`). `Library`, `UnknownLibraryError`, and
+  `DEFAULT_CORE_ROOT` are re-exposed from upstream via `const_set`
+  — they're value/exception types, not Loader logic. Three
+  upstream-internal methods are intentionally dropped:
+  `has_library?` / `resolve_dependencies` (only called from inside
+  the loader; the logic is folded into Rust's `each_dir` / `add_lib`)
+  and `each_signature` (the only external caller was
+  `spec/compat/gems_spec.rb`, switched to `each_dir`; reimplementing
+  it in Ruby would reintroduce the upstream `Parser.parse_signature`
+  Ruby AST instantiation that PR #65 eliminated). The benchmark
+  numbers in the tables above are within run-to-run jitter of the
+  previous revision — this is a responsibility-allocation change,
+  not a perf change. The motivation is that the previous patch on
+  `#load` left the class split across two languages (upstream Ruby
+  + a Rust-backed `load` method); the swap puts Loader-internal
+  state and dispatch all on the Rust side and confines Ruby to the
+  facade plus the genuinely Ruby-bound pieces (`gem_sig_path`,
+  `add_collection`'s Lockfile orchestration, the upstream value
+  types).
 - Materializer optimisations layered on top of the original baseline
   (all reflected in the librbs numbers above):
   - `TypeName` / `Namespace` are flyweighted by interner Sym, so the same

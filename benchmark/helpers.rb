@@ -106,7 +106,7 @@ module BenchHelpers
         $LOAD_PATH.unshift(File.expand_path("lib", #{ROOT.inspect}))
         require "rbs"
         require "librbs"
-        unless defined?(Librbs::Native) && Librbs::Native.respond_to?(:load_env)
+        unless defined?(Librbs::Native::Loader)
           abort "[bench] librbs native extension is not loaded; run `bundle exec rake compile` first"
         end
       RUBY
