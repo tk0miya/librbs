@@ -1,7 +1,7 @@
 # M4 baseline benchmark
 
-Date: 2026-05-11
-Environment: Ubuntu 24.04 LTS / Ruby 3.3.6 / Linux x86_64 (Intel Xeon @ 2.80GHz, kernel 6.18.5)
+Date: 2026-05-17
+Environment: macOS 15 / Ruby 3.3.11 / Darwin 24.6.0 (arm64-darwin24, M4 Mac)
 
 Cold-start wall time, minimum of 3 runs per cell. Each (impl, size) pair
 runs in its own subprocess (`require "librbs"` patches `RBS::Environment`
@@ -10,15 +10,18 @@ globally — see `benchmark/helpers.rb`).
 Sizes:
 
 - **small**: core only.
-- **large**: core + the gem RBS collection produced by SeleniumHQ/selenium's
-  `rbs_collection.lock.yaml` (~33 gems via gem_rbs_collection, plus
-  rubygems-sourced sigs such as `webrick`, `prism`).
+- **large**: core + the gem RBS collection produced by kaigionrails/conference-app's
+  `rbs_collection.lock.yaml` (~92 gems via gem_rbs_collection, plus
+  rubygems-sourced sigs such as `herb`, `reactionview`, `base64`,
+  `bigdecimal`, `prism`).
 
 librbs is reported in two columns — **normal** (upstream
 `Class#new` initializers) and **fast alloc** (the `obj_alloc +
 ivar_set` bypass; this is the default). See `benchmark/README.md`
 for the env-var knob. `speedup_n` / `speedup_f` are pure-RBS divided
-by the matching librbs column.
+by the matching librbs column. The pure-RBS column is taken from the
+fast-alloc-off run (the env var doesn't affect pure RBS; values from
+the on-run are within run-to-run jitter).
 
 ## load_only.rb
 
@@ -27,8 +30,8 @@ by the matching librbs column.
 
 | size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-----------|-----------------|-----------|---------------------|-----------|
-| small  |  156.2 ms |        154.6 ms |     1.01x |             89.6 ms |     1.74x |
-| large  | 1184.4 ms |        709.8 ms |     1.67x |            379.3 ms |     3.12x |
+| small  |   48.7 ms |         42.0 ms |     1.16x |             28.3 ms |     1.92x |
+| large  | 1037.8 ms |        424.4 ms |     2.45x |            217.9 ms |     4.17x |
 
 ## load_and_resolve.rb
 
@@ -36,19 +39,19 @@ by the matching librbs column.
 
 | size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-----------|-----------------|-----------|---------------------|-----------|
-| small  |  289.0 ms |        161.6 ms |     1.79x |             98.6 ms |     2.93x |
-| large  | 3308.1 ms |        824.0 ms |     4.01x |            409.5 ms |     8.08x |
+| small  |   88.9 ms |         43.1 ms |     2.06x |             25.5 ms |     3.48x |
+| large  | 2254.0 ms |        438.0 ms |     5.15x |            287.6 ms |     8.30x |
 
 ## Resolve-only cost (load_and_resolve − load_only)
 
 | size  | pure RBS  | librbs (normal) | librbs (fast alloc)                   |
 |-------|-----------|-----------------|---------------------------------------|
-| small |  132.8 ms |          7.0 ms |   9.0 ms (≈0, within run-to-run noise)|
-| large | 2123.7 ms |        114.2 ms |  30.2 ms                              |
+| small |   40.2 ms |          1.1 ms |  -2.8 ms (≈0, within run-to-run noise)|
+| large | 1216.2 ms |         13.6 ms |  69.7 ms (≈0, within run-to-run noise)|
 
 In librbs the resolve phase is essentially free — every visible difference
 between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~120ms (small) to ~2.1s (large) inside `resolve_type_names`, so
+spends ~40ms (small) to ~1.2s (large) inside `resolve_type_names`, so
 that step alone accounts for the bulk of the resolve-path gap.
 
 ## Notes captured during the run

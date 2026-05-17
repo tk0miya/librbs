@@ -18,7 +18,10 @@ gems:
   # It's unnecessary if you don't use rbs as a library.
   - name: rbs
     ignore: true
-  - name: steep
-    ignore: true
-  - name: selenium-webdriver
-    ignore: true
+
+  - name: base64
+  - name: json
+  - name: ffi
+    ignore: true # See https://github.com/ffi/ffi/issues/1107
+  - name: multi_xml
+    ignore: true # Stub for Psych::SyntaxError conflicts with rbs 4.0+ stdlib
