@@ -246,27 +246,31 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     Ok(ruby.qnil().as_value())
 }
 
-/// `Librbs::Native.load_env(env, core_root, libs, dirs, repo_dirs)` —
+/// `Librbs::Native.load_env(env, core_root, libs, dirs, repository)` —
 /// invoked from the patched `RBS::EnvironmentLoader#load`. The Ruby
-/// side hands over the loader's configuration as plain data; this
-/// function owns the rest of the `each_dir` orchestration that
-/// upstream's pure-Ruby `load` would run:
+/// side hands over the loader's configuration; this function owns
+/// the rest of the `each_dir` orchestration that upstream's pure-Ruby
+/// `load` would run:
 ///
 /// - `core_root`: `String` or `nil` (the core `.rbs` directory).
 /// - `libs`: `Array<RBS::EnvironmentLoader::Library>` in insertion
 ///   order. Each lib is resolved by first calling back into Ruby for
-///   `RBS::EnvironmentLoader.gem_sig_path(name, version)` (the only
-///   piece that must stay on the Ruby side because it consults
-///   `Gem::Specification.find_by_name`), and on `nil` falling back to
-///   the native `RepositoryIndex` lookup built from `repo_dirs`. If
-///   neither yields a path, an `RBS::EnvironmentLoader::UnknownLibraryError`
-///   is raised carrying the original lib Value via the `lib:` kwarg
-///   (matching upstream's exception shape).
+///   `RBS::EnvironmentLoader.gem_sig_path(name, version)` and, on
+///   `nil`, by calling `repository.lookup(name, version)`. Both
+///   callbacks stay on the Ruby side: upstream's `Gem::Specification`
+///   and `RBS::Repository::GemRBS` already memoize their per-gem
+///   walks, so a Rust reimplementation was measured to be a wash
+///   (single-load) or noise-level (multi-load) — see
+///   `benchmark/summary.md` for the data behind the decision. If
+///   neither callback yields a path, an
+///   `RBS::EnvironmentLoader::UnknownLibraryError` is raised carrying
+///   the original lib Value via the `lib:` kwarg.
 /// - `dirs`: user-supplied paths added via `loader.add(path: ...)`.
 ///   These keep `skip_hidden = false` per upstream's
 ///   `!source.is_a?(Pathname)` rule.
-/// - `repo_dirs`: the repository's `dirs` array (collection caches
-///   added via `add_collection`, plus the default stdlib root).
+/// - `repository`: the loader's `RBS::Repository` instance (upstream
+///   class — librbs does not replace it). `repository.lookup` is the
+///   only thing Rust calls on it; per-lib funcall overhead is sub-µs.
 ///
 /// The resulting `(path, skip_hidden)` list is fed to
 /// `librbs_core::discovery::discover_rbs_files` and then through
@@ -277,7 +281,7 @@ fn load_env(
     core_root: Value,
     libs: RArray,
     dirs: RArray,
-    repo_dirs: RArray,
+    repository: Value,
 ) -> Result<Value, Error> {
     let ruby = Ruby::get().expect("Ruby thread");
 
@@ -292,14 +296,8 @@ fn load_env(
         });
     }
 
-    // 2. libs — gem_sig_path callback into Ruby, fallback to the
-    // native repository index.
-    let mut repo_index = librbs_core::repository::RepositoryIndex::new();
-    for d in repo_dirs.into_iter() {
-        let s: String = TryConvert::try_convert(d)?;
-        repo_index.add_dir(&PathBuf::from(s));
-    }
-
+    // 2. libs — gem_sig_path callback into Ruby, fallback to
+    // `RBS::Repository#lookup` (also Ruby).
     let env_loader_class: Value = ruby.eval("RBS::EnvironmentLoader")?;
     let unknown_lib_class: Value = ruby.eval("RBS::EnvironmentLoader::UnknownLibraryError")?;
 
@@ -325,9 +323,11 @@ fn load_env(
             continue;
         }
 
-        if let Some(path) = repo_index.lookup(&name, version.as_deref()) {
+        let repo_result: Value = repository.funcall("lookup", (name.clone(), version.clone()))?;
+        if !repo_result.is_nil() {
+            let path: String = repo_result.funcall("to_s", ())?;
             specs.push(librbs_core::discovery::DirSpec {
-                path,
+                path: PathBuf::from(path),
                 skip_hidden: true,
             });
             continue;
@@ -338,15 +338,10 @@ fn load_env(
         // RBS::EnvironmentLoader::UnknownLibraryError => e; e.library`
         // keep working.
         let err_inst: magnus::Exception = env_loader_class
-            .funcall::<_, _, Value>(
-                "const_get",
-                (ruby.to_symbol("UnknownLibraryError"),),
-            )
+            .funcall::<_, _, Value>("const_get", (ruby.to_symbol("UnknownLibraryError"),))
             .and_then(|_| {
-                unknown_lib_class.funcall::<_, _, magnus::Exception>(
-                    "new",
-                    (magnus::kwargs!("lib" => lib),),
-                )
+                unknown_lib_class
+                    .funcall::<_, _, magnus::Exception>("new", (magnus::kwargs!("lib" => lib),))
             })?;
         return Err(Error::from(err_inst));
     }
