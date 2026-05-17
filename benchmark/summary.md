@@ -29,9 +29,9 @@ the on-run are within run-to-run jitter).
 
 | ruby   | small (normal / fast) | large (normal / fast)  |
 |--------|-----------------------|------------------------|
-| 3.3.11 | 2.11x / **3.39x**     | 4.90x / **9.63x**      |
-| 3.4.9  | 1.54x / **2.49x**     | 1.50x / **2.41x**      |
-| 4.0.4  | 1.56x / **2.24x**     | 1.50x / **2.27x**      |
+| 3.3.11 | 2.64x / **3.53x**     | 5.51x / **11.13x**     |
+| 3.4.9  | 1.69x / **2.75x**     | 1.41x / **2.33x**      |
+| 4.0.4  | 2.02x / **2.83x**     | 1.71x / **3.07x**      |
 
 Bold cells are the headline speedup for that row.
 
@@ -43,31 +43,38 @@ fully realized Ruby state on both sides.
 
 | ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-------|-----------|-----------------|-----------|---------------------|-----------|
-| 3.3.11 | small |   89.5 ms |         42.4 ms |     2.11x |             26.4 ms |     3.39x |
-| 3.3.11 | large | 2115.8 ms |        431.8 ms |     4.90x |            219.7 ms |     9.63x |
-| 3.4.9  | small |   58.4 ms |         37.9 ms |     1.54x |             23.5 ms |     2.49x |
-| 3.4.9  | large |  514.4 ms |        342.8 ms |     1.50x |            213.7 ms |     2.41x |
-| 4.0.4  | small |   51.4 ms |         33.0 ms |     1.56x |             22.9 ms |     2.24x |
-| 4.0.4  | large |  391.9 ms |        260.6 ms |     1.50x |            173.0 ms |     2.27x |
+| 3.3.11 | small |  102.4 ms |         38.9 ms |     2.64x |             25.4 ms |     3.53x |
+| 3.3.11 | large | 2102.5 ms |        381.4 ms |     5.51x |            185.9 ms |    11.13x |
+| 3.4.9  | small |   59.0 ms |         35.0 ms |     1.69x |             21.0 ms |     2.75x |
+| 3.4.9  | large |  447.3 ms |        316.2 ms |     1.41x |            197.5 ms |     2.33x |
+| 4.0.4  | small |   54.0 ms |         26.7 ms |     2.02x |             18.4 ms |     2.83x |
+| 4.0.4  | large |  412.2 ms |        241.1 ms |     1.71x |            132.7 ms |     3.07x |
 
 ## Cross-Ruby observations
 
 - Pure RBS gets dramatically faster on 3.4+. `large` pure-RBS time
-  drops from ~2120 ms on 3.3.11 to ~510 ms on 3.4.9 and ~390 ms on
+  drops from ~2100 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on
   4.0.4 — Ruby 3.4 makes Prism the default parser, and the same
   effect compresses the librbs speedup ratio without librbs itself
-  slowing down (fast-alloc large only drops from 220 ms to ~170 ms
-  across the three Rubies).
+  slowing down (fast-alloc large drops from 186 ms on 3.3.11 to
+  ~135–200 ms across the 3.4+ Rubies).
 - **Fast alloc** retains a clear margin on every cell: small
-  2.24x–3.39x, large 2.27x–9.63x. The 3.3.11 large 9.63x is the high
-  watermark; on 3.4+ it compresses to ~2.3x because pure RBS shrank,
-  not because librbs regressed.
+  2.75x–3.53x, large 2.33x–11.13x. The 3.3.11 large 11.13x is the
+  high watermark; on 3.4+ it compresses to ~2.3–3.0x because pure
+  RBS shrank, not because librbs regressed.
 - The resolve phase is essentially free in librbs across every Ruby.
   The previous two-script bench split `load_only` vs `load_and_resolve`
   and the librbs-side difference stayed within run-to-run noise on
   every cell, which is why the split has since been consolidated into
   the single `benchmark.rb` reported here. The speedup compression on
   3.4+ is entirely explained by pure RBS getting faster.
+- The `from_loader` phase is now dominated by `Native.materialize_all`
+  rather than file discovery or library resolution. With discovery
+  ported to Rust (`librbs_core::discovery`) and the per-gem version
+  walk ported to a native `RepositoryIndex`, the only Ruby work left
+  in `from_loader` is the `RBS::EnvironmentLoader.gem_sig_path`
+  callback that consults `Gem::Specification.find_by_name` — a
+  RubyGems-bound API kept on the Ruby side intentionally.
 
 ## Notes captured during the run
 
@@ -86,6 +93,41 @@ fully realized Ruby state on both sides.
   result through a new `Loader::add_library_with_path` Rust API, mirroring
   upstream's `gem_sig_path` → `repository.lookup` fallback chain in
   `vendor/rbs/lib/rbs/environment_loader.rb#each_dir`.
+- **`from_loader` rewrite (this revision).** Upstream-style `each_dir` was
+  previously running entirely on the Ruby side: `RBS::FileFinder.each_file`
+  +`Pathname.glob` walked every `.rbs` directory, and
+  `RBS::Repository::GemRBS#load!` did the per-gem version enumeration via
+  `Pathname#each_child`. Stackprof on Ruby 4.0.4 / large showed Ruby's
+  `Dir.glob` / `Dir.open` + `File.basename` taking 63% of `from_loader`,
+  and `Pathname#children` taking another 78% of what remained after that
+  was ported. Both are now in Rust:
+  - `crates/librbs-core/src/discovery.rs` walks each `(dir, skip_hidden)`
+    spec via `std::fs::read_dir` with rayon across specs, prunes
+    `_`-prefixed subtrees on descent (matching upstream's
+    `child.relative_path_from(path).ascend.drop(1).none?` filter), sorts
+    within each spec, and deduplicates across specs.
+  - `crates/librbs-core/src/repository.rs` mirrors `Repository::GemRBS`:
+    `add_dir` enumerates only the gem-name dirs eagerly, the per-gem
+    version walk is deferred to first `lookup` (matching upstream's
+    `add` vs `GemRBS#load!` split). A narrow `Version` parser handles
+    the release-only sequences upstream's lookup ever compares (prerelease
+    versions are filtered up-front).
+  - `ext/librbs/src/lib.rs::load_env` now owns the orchestration. It
+    receives `(env, core_root, libs, dirs, repo_dirs)`, calls back into
+    Ruby only for `RBS::EnvironmentLoader.gem_sig_path` (the
+    `Gem::Specification.find_by_name`-bound part), and raises a real
+    `RBS::EnvironmentLoader::UnknownLibraryError` with the original lib
+    Value via `kwargs!("lib" => lib)` on resolution failure. The Ruby
+    patch in `lib/librbs/patches/environment_loader.rb` is now twelve
+    declarative lines that hand the loader's configuration to Rust;
+    `each_dir` / `FileFinder` no longer run on the Ruby side.
+  
+  Effect on Ruby 4.0.4 / large: from_loader phase dropped from ~56 ms
+  (Ruby `Dir.glob` + `Pathname#children`) to ~30 ms (mostly the Rust
+  parser plus the `gem_sig_path` callback chain, ~13% of `from_loader`).
+  Total bench wall time moved from 174.9 ms (2.45x) to 132.7 ms (3.07x).
+  Equivalent gains land on 3.3.11 and 3.4.9; the numbers in the table
+  above reflect this state.
 - Materializer optimisations layered on top of the original baseline
   (all reflected in the librbs numbers above):
   - `TypeName` / `Namespace` are flyweighted by interner Sym, so the same

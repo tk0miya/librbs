@@ -246,23 +246,121 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     Ok(ruby.qnil().as_value())
 }
 
-/// `Librbs::Native.load_env(env, paths)` — invoked from the patched
-/// `RBS::EnvironmentLoader#load`. `paths` is a flat, deduplicated
-/// `Array<Pathname>` of every `.rbs` file the loader would visit;
-/// Ruby handles `each_dir` + `FileFinder.each_file` + dedup. This
-/// function only marshalls the Ruby Array into `Vec<PathBuf>` and
-/// hands it to `librbs_core::Environment::from_paths`, which does
-/// the parallel read + parse + `add_source` work, then attaches the
-/// resulting handle to `env` via `@__librbs_handle`.
-fn load_env(env: Value, paths: RArray) -> Result<Value, Error> {
+/// `Librbs::Native.load_env(env, core_root, libs, dirs, repo_dirs)` —
+/// invoked from the patched `RBS::EnvironmentLoader#load`. The Ruby
+/// side hands over the loader's configuration as plain data; this
+/// function owns the rest of the `each_dir` orchestration that
+/// upstream's pure-Ruby `load` would run:
+///
+/// - `core_root`: `String` or `nil` (the core `.rbs` directory).
+/// - `libs`: `Array<RBS::EnvironmentLoader::Library>` in insertion
+///   order. Each lib is resolved by first calling back into Ruby for
+///   `RBS::EnvironmentLoader.gem_sig_path(name, version)` (the only
+///   piece that must stay on the Ruby side because it consults
+///   `Gem::Specification.find_by_name`), and on `nil` falling back to
+///   the native `RepositoryIndex` lookup built from `repo_dirs`. If
+///   neither yields a path, an `RBS::EnvironmentLoader::UnknownLibraryError`
+///   is raised carrying the original lib Value via the `lib:` kwarg
+///   (matching upstream's exception shape).
+/// - `dirs`: user-supplied paths added via `loader.add(path: ...)`.
+///   These keep `skip_hidden = false` per upstream's
+///   `!source.is_a?(Pathname)` rule.
+/// - `repo_dirs`: the repository's `dirs` array (collection caches
+///   added via `add_collection`, plus the default stdlib root).
+///
+/// The resulting `(path, skip_hidden)` list is fed to
+/// `librbs_core::discovery::discover_rbs_files` and then through
+/// `librbs_core::Environment::from_paths` for the parallel read +
+/// parse + `add_source` pipeline.
+fn load_env(
+    env: Value,
+    core_root: Value,
+    libs: RArray,
+    dirs: RArray,
+    repo_dirs: RArray,
+) -> Result<Value, Error> {
     let ruby = Ruby::get().expect("Ruby thread");
 
-    let mut files: Vec<PathBuf> = Vec::with_capacity(paths.len());
-    for v in paths.into_iter() {
-        let s: String = v.funcall("to_s", ())?;
-        files.push(PathBuf::from(s));
+    let mut specs: Vec<librbs_core::discovery::DirSpec> = Vec::new();
+
+    // 1. core
+    if !core_root.is_nil() {
+        let path: String = TryConvert::try_convert(core_root)?;
+        specs.push(librbs_core::discovery::DirSpec {
+            path: PathBuf::from(path),
+            skip_hidden: true,
+        });
     }
 
+    // 2. libs — gem_sig_path callback into Ruby, fallback to the
+    // native repository index.
+    let mut repo_index = librbs_core::repository::RepositoryIndex::new();
+    for d in repo_dirs.into_iter() {
+        let s: String = TryConvert::try_convert(d)?;
+        repo_index.add_dir(&PathBuf::from(s));
+    }
+
+    let env_loader_class: Value = ruby.eval("RBS::EnvironmentLoader")?;
+    let unknown_lib_class: Value = ruby.eval("RBS::EnvironmentLoader::UnknownLibraryError")?;
+
+    for lib in libs.into_iter() {
+        let name: String = lib.funcall("name", ())?;
+        let version_v: Value = lib.funcall("version", ())?;
+        let version: Option<String> = if version_v.is_nil() {
+            None
+        } else {
+            Some(TryConvert::try_convert(version_v)?)
+        };
+
+        let gem_result: Value =
+            env_loader_class.funcall("gem_sig_path", (name.clone(), version.clone()))?;
+        if !gem_result.is_nil() {
+            let pair = RArray::try_convert(gem_result)?;
+            let path_v: Value = pair.entry(1)?;
+            let path: String = path_v.funcall("to_s", ())?;
+            specs.push(librbs_core::discovery::DirSpec {
+                path: PathBuf::from(path),
+                skip_hidden: true,
+            });
+            continue;
+        }
+
+        if let Some(path) = repo_index.lookup(&name, version.as_deref()) {
+            specs.push(librbs_core::discovery::DirSpec {
+                path,
+                skip_hidden: true,
+            });
+            continue;
+        }
+
+        // Unknown library — raise the upstream-compatible class with
+        // the lib Value attached, so consumers that `rescue
+        // RBS::EnvironmentLoader::UnknownLibraryError => e; e.library`
+        // keep working.
+        let err_inst: magnus::Exception = env_loader_class
+            .funcall::<_, _, Value>(
+                "const_get",
+                (ruby.to_symbol("UnknownLibraryError"),),
+            )
+            .and_then(|_| {
+                unknown_lib_class.funcall::<_, _, magnus::Exception>(
+                    "new",
+                    (magnus::kwargs!("lib" => lib),),
+                )
+            })?;
+        return Err(Error::from(err_inst));
+    }
+
+    // 3. user-added dirs
+    for d in dirs.into_iter() {
+        let path: String = d.funcall("to_s", ())?;
+        specs.push(librbs_core::discovery::DirSpec {
+            path: PathBuf::from(path),
+            skip_hidden: false,
+        });
+    }
+
+    let files = librbs_core::discovery::discover_rbs_files(specs).map_err(rb_runtime_err)?;
     let core_env = librbs_core::Environment::from_paths(files).map_err(rb_runtime_err)?;
 
     let wrapped: Value = WrappedEnvironment(Arc::new(core_env)).into_value_with(&ruby);
@@ -286,7 +384,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let wrapped_res_class = module.define_class("WrappedResolution", object)?;
     wrapped_res_class.undef_default_alloc_func();
 
-    module.define_singleton_method("load_env", function!(load_env, 2))?;
+    module.define_singleton_method("load_env", function!(load_env, 5))?;
     module.define_singleton_method("resolve_type_names", function!(resolve_type_names, 2))?;
     module.define_singleton_method("materialize_all", function!(materialize_all, 1))?;
 
