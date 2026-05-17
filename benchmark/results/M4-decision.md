@@ -4,42 +4,51 @@ Date: 2026-05-17
 
 ## The numbers (recap)
 
-Speedups against pure RBS. `normal` is the upstream-initializer path,
-`fast` is the `obj_alloc + ivar_set` bypass (default). Corpus: core
-(small) and kaigionrails/conference-app's 92-gem RBS collection (large)
-— see `M4-baseline.md` for the full tables and environment.
+Speedups against pure RBS across Ruby 3.3.11 / 3.4.9 / 4.0.4. `normal`
+is the upstream-initializer path, `fast` is the `obj_alloc + ivar_set`
+bypass (default). Corpus: core (small) and kaigionrails/conference-app's
+92-gem RBS collection (large) — see `M4-baseline.md` for the full
+tables, raw timings, and environment.
 
-| script                | small (normal / fast)  | large (normal / fast) |
-|-----------------------|------------------------|-----------------------|
-| `load_only.rb`        | 1.16x / **1.92x**      | 2.45x / **4.17x**     |
-| `load_and_resolve.rb` | 2.06x / **3.48x**      | 5.15x / **8.30x**     |
+| ruby   | script                | small (normal / fast) | large (normal / fast)  |
+|--------|-----------------------|-----------------------|------------------------|
+| 3.3.11 | `load_only.rb`        | 1.18x / **1.78x**     | 2.27x / **4.84x**      |
+| 3.3.11 | `load_and_resolve.rb` | 2.11x / **3.39x**     | 4.90x / **9.63x**      |
+| 3.4.9  | `load_only.rb`        | 1.13x / **1.50x**     | **0.76x** / **1.29x**  |
+| 3.4.9  | `load_and_resolve.rb` | 1.54x / **2.49x**     | 1.50x / **2.41x**      |
+| 4.0.4  | `load_only.rb`        | **0.97x** / **1.49x** | **0.70x** / **1.33x**  |
+| 4.0.4  | `load_and_resolve.rb` | 1.56x / **2.24x**     | 1.50x / **2.27x**      |
 
-The load-only path on `large` clears 4x in fast-alloc mode and `small`
-sits a hair under 2x, after expanding the `obj_alloc + ivar_set`
-bypass beyond `Types::Bases::*` to cover every materializer call site
-whose upstream `initialize` is a pure ivar sequence (PR #51 — see the
-matching note in `M4-baseline.md`). That stacks on top of the prior
-materialiser tuning (`TypeName` / `Namespace` flyweighting, the
-`RBS::Location` children FFI fast path, the per-ctx static-Symbol
-cache, the original `Types::Bases::*` fast path, and the
-`rbs_new_location2` FFI fast path for `RBS::Location.new` itself).
-`large` is a clear win in both modes; `small` is now a meaningful win
-in fast-alloc mode too (1.92x / 3.48x), with the remaining margin
-dominated by fixed parser+loader cost rather than the materialiser.
+(Cells where librbs trails pure RBS are bolded for visibility; bold in
+the fast column flags the headline number for that row.)
+
+Ruby 3.4 makes Prism the default parser and pulls a large chunk of the
+parser cost into pure RBS itself. The librbs **normal** path now
+trails pure RBS on 3.4+ `large` `load_only` (0.76x / 0.70x) — the
+materializer's `:initialize` funcall overhead exceeds what librbs
+saves on the parser side once pure RBS has Prism. The **fast alloc**
+bypass (PR #51, `obj_alloc + ivar_set` for every materializer call site
+whose upstream `initialize` is a pure ivar sequence; stacking on prior
+`TypeName` / `Namespace` flyweighting, the `RBS::Location` FFI fast
+paths, the per-ctx Symbol cache, and the `rbs_new_location2` bridge —
+see `M4-baseline.md`) is the only librbs configuration that still wins
+on every cell.
 
 ## Mapping to the M4 decision flow
 
 The flow in `docs/tasks/milestones/M4-decision-point.md` (Task §4) reads:
 
-- `load_and_resolve >= 2x AND load_only >= 2x` → M4b. **Matched on
-  `large` in both modes** (5.15x / 2.45x normal; 8.30x / 4.17x fast).
-  Not matched on `small`: load_only is 1.16x normal / 1.92x fast,
-  both under the 2x threshold.
-- `load_and_resolve >= 3x AND load_only < 1.5x` → M4a. **No longer
-  matched on large** in either mode (load_only is 2.45x normal /
-  4.17x fast).
+- `load_and_resolve >= 2x AND load_only >= 2x` → M4b. **Matched only
+  on Ruby 3.3.11 / `large`** (4.90x / 2.27x normal; 9.63x / 4.84x
+  fast). On 3.4+ `load_only` is below 2x in every cell, so M4b's
+  joint threshold no longer triggers regardless of Ruby version.
+- `load_and_resolve >= 3x AND load_only < 1.5x` → M4a. **Not matched**
+  anywhere — `load_and_resolve` only clears 3x in fast-alloc mode on
+  3.3.11 (3.39x small, 9.63x large), and in those cells `load_only` is
+  not below 1.5x.
 - `load_and_resolve < 1.5x` → re-investigate M3. **Not matched** —
-  smallest cell is 2.06x.
+  the smallest `load_and_resolve` cell is 1.50x (3.4.9 large normal /
+  4.0.4 large normal), right at the threshold but above it.
 
 ## Decision: defer implementation; record baseline only
 
@@ -53,9 +62,13 @@ milestone. Reasoning:
    Core+Wrapper") subsumes the per-Entry handle / lazy-materialize
    plumbing M4a would add. That followup is the agreed shape post-M4 and
    was deliberately deferred until M4 told us how much partial-patch
-   overhead costs. The benchmark above answers "the resolve win is real,
-   materialization is a modest remaining ceiling on small"; both
-   insights flow directly into the Core+Wrapper kickoff.
+   overhead costs. The benchmark above answers it: the resolve win is
+   real but compresses on 3.4+ as pure RBS adopts Prism, and the
+   materializer is now the dominant cost — normal-mode librbs even
+   trails pure RBS on 3.4+ `large` `load_only`. Both insights argue
+   for moving directly to the Core+Wrapper kickoff (which restructures
+   materialisation) rather than spending M4a effort on a partial-patch
+   plumbing layer whose Ruby-version safety margin is already eroding.
 
 2. **M4b ("compatibility-API completion") also gets folded into the
    Core+Wrapper rebuild**. Its motivation is closing the silent-
