@@ -13,4 +13,4 @@ EXPR = <<~RUBY
   env.class_decls.size
 RUBY
 
-BenchHelpers.report_realtime(title: "cold-start (load + resolve)", expr: EXPR)
+BenchHelpers.report_realtime(title: "load + resolve", expr: EXPR)

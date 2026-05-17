@@ -1,9 +1,9 @@
-# Cold-start benchmark results
+# Benchmark results
 
 Date: 2026-05-17
 Environment: macOS 15 / Ruby 3.3.11, 3.4.9, 4.0.4 (rbenv-switched) / Darwin 24.6.0 (arm64-darwin24, M4 Mac)
 
-Cold-start wall time, minimum of 3 runs per cell. Each (impl, size, ruby)
+Wall time, minimum of 3 runs per cell. Each (impl, size, ruby)
 triple runs in its own subprocess (`require "librbs"` patches
 `RBS::Environment` globally — see `benchmark/helpers.rb`). Ruby was
 switched via `rbenv`, with `bundle install` + `rake compile` rerun per

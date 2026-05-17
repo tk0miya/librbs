@@ -1,7 +1,6 @@
 # Benchmark suite
 
-Cold-start benchmarks comparing pure RBS against the librbs native
-implementation.
+Benchmarks comparing pure RBS against the librbs native implementation.
 
 ## Setup
 
@@ -49,8 +48,8 @@ lockfile, replace `benchmark/fixtures/conference_app.rbs_collection.{yaml,lock.y
 The bench drives one workload — `from_loader` + `resolve_type_names`
 + materialize, the full "give me a usable RBS::Environment" pipeline
 — across two sizes (`small` and `large`) and both implementations
-(pure RBS and librbs), then prints a Markdown table with cold-start
-wall times and the librbs speedup. `class_decls.size` at the end of
+(pure RBS and librbs), then prints a Markdown table with wall times
+and the librbs speedup. `class_decls.size` at the end of
 the timed block forces the librbs path's one-shot `materialize_all`
 so we are comparing fully realized Ruby state on both sides.
 
