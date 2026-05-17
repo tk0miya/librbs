@@ -1,17 +1,21 @@
 # frozen_string_literal: true
 
-require "set"
-
 module Librbs
   module Patches
     module EnvironmentLoader
-      # Replace upstream `RBS::EnvironmentLoader#load`. The Ruby side
-      # decides *what* directories to walk by invoking `each_dir`, then
-      # walks each one through upstream `FileFinder.each_file` (the
-      # same primitive `EnvironmentLoader#each_signature` uses) to
-      # produce a deduplicated flat list of `.rbs` paths. The Rust
-      # bridge receives that list and runs the parallel read + parse +
-      # `Environment::add_source` pipeline.
+      # Replace upstream `RBS::EnvironmentLoader#load`. The Ruby patch
+      # collects the loader's configuration and hands it to
+      # `Librbs::Native.load_env`, which owns the rest of the
+      # `each_dir` orchestration: gem resolution (with a Ruby callback
+      # into `RBS::EnvironmentLoader.gem_sig_path` for the RubyGems-
+      # bound part), repository version-best lookup (native via
+      # `librbs_core::repository::RepositoryIndex`), file discovery,
+      # read + parse, and `Environment::add_source`.
+      #
+      # `libs` is passed as `Array<Library>` rather than a list of
+      # `(name, version)` tuples so the native side can attach the
+      # original lib Value to `RBS::EnvironmentLoader::UnknownLibraryError`
+      # via `lib:` — matching upstream's exception shape exactly.
       #
       # The returned Array is intentionally empty. Upstream returns a
       # `[[decl, path, source], ...]` list, but populating it would
@@ -26,19 +30,13 @@ module Librbs
           add(library: "stringio", version: nil)
         end
 
-        paths = []
-        seen = Set.new
-        each_dir do |source, dir|
-          # `skip_hidden = !source.is_a?(Pathname)` mirrors upstream
-          # `each_signature` — `_`-prefixed dirs are hidden for core /
-          # library sources, kept for user-supplied paths.
-          skip_hidden = !source.is_a?(Pathname)
-          RBS::FileFinder.each_file(dir, skip_hidden: skip_hidden) do |path|
-            paths << path if seen.add?(path)
-          end
-        end
-
-        Librbs::Native.load_env(env, paths)
+        Librbs::Native.load_env(
+          env,
+          core_root&.to_s,
+          libs.to_a,
+          dirs,
+          repository.dirs.map(&:to_s)
+        )
 
         []
       end
