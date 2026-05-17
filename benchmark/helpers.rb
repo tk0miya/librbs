@@ -25,18 +25,20 @@ module BenchHelpers
   # small case adds nothing on top.
   #
   # `:large` references an `rbs_collection.lock.yaml` vendored from a
-  # real-world OSS project (SeleniumHQ/selenium). Before running the
-  # large case, populate the collection cache once with:
+  # real-world OSS project (kaigionrails/conference-app). Before running
+  # the large case, populate both the collection cache and the gem path
+  # (some sigs are `type: rubygems` and ship inside the gem itself):
   #
   #     cd benchmark/fixtures && \
+  #       BUNDLE_GEMFILE="$PWD/Gemfile" bundle install && \
   #       bundle exec rbs collection install \
-  #         --collection selenium.rbs_collection.yaml --frozen
+  #         --collection conference_app.rbs_collection.yaml --frozen
   SIZES = {
     small: {
       libraries: []
     },
     large: {
-      collection: "fixtures/selenium.rbs_collection.lock.yaml"
+      collection: "fixtures/conference_app.rbs_collection.lock.yaml"
     }
   }.freeze
 
@@ -80,7 +82,7 @@ module BenchHelpers
         unless File.directory?(#{cache_dir.inspect})
           abort "[bench] collection cache missing at #{cache_dir} -- run: " \\
                 "cd benchmark/fixtures && bundle exec rbs " \\
-                "--collection selenium.rbs_collection.yaml " \\
+                "--collection conference_app.rbs_collection.yaml " \\
                 "collection install --frozen"
         end
         _lockfile = RBS::Collection::Config::Lockfile.from_lockfile(

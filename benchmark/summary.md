@@ -1,55 +1,95 @@
-# M4 baseline benchmark
+# Cold-start benchmark results
 
-Date: 2026-05-11
-Environment: Ubuntu 24.04 LTS / Ruby 3.3.6 / Linux x86_64 (Intel Xeon @ 2.80GHz, kernel 6.18.5)
+Date: 2026-05-17
+Environment: macOS 15 / Ruby 3.3.11, 3.4.9, 4.0.4 (rbenv-switched) / Darwin 24.6.0 (arm64-darwin24, M4 Mac)
 
-Cold-start wall time, minimum of 3 runs per cell. Each (impl, size) pair
-runs in its own subprocess (`require "librbs"` patches `RBS::Environment`
-globally — see `benchmark/helpers.rb`).
+Cold-start wall time, minimum of 3 runs per cell. Each (impl, size, ruby)
+triple runs in its own subprocess (`require "librbs"` patches
+`RBS::Environment` globally — see `benchmark/helpers.rb`). Ruby was
+switched via `rbenv`, with `bundle install` + `rake compile` rerun per
+version so each row uses a natively-compiled librbs against that Ruby.
 
 Sizes:
 
 - **small**: core only.
-- **large**: core + the gem RBS collection produced by SeleniumHQ/selenium's
-  `rbs_collection.lock.yaml` (~33 gems via gem_rbs_collection, plus
-  rubygems-sourced sigs such as `webrick`, `prism`).
+- **large**: core + the gem RBS collection produced by kaigionrails/conference-app's
+  `rbs_collection.lock.yaml` (~92 gems via gem_rbs_collection, plus
+  rubygems-sourced sigs such as `herb`, `reactionview`, `base64`,
+  `bigdecimal`, `prism`).
 
 librbs is reported in two columns — **normal** (upstream
 `Class#new` initializers) and **fast alloc** (the `obj_alloc +
 ivar_set` bypass; this is the default). See `benchmark/README.md`
 for the env-var knob. `speedup_n` / `speedup_f` are pure-RBS divided
-by the matching librbs column.
+by the matching librbs column. The pure-RBS column is taken from the
+fast-alloc-off run (the env var doesn't affect pure RBS; values from
+the on-run are within run-to-run jitter).
+
+## Speedups (recap)
+
+| ruby   | script                | small (normal / fast) | large (normal / fast)  |
+|--------|-----------------------|-----------------------|------------------------|
+| 3.3.11 | `load_only.rb`        | 1.18x / **1.78x**     | 2.27x / **4.84x**      |
+| 3.3.11 | `load_and_resolve.rb` | 2.11x / **3.39x**     | 4.90x / **9.63x**      |
+| 3.4.9  | `load_only.rb`        | 1.13x / **1.50x**     | **0.76x** / **1.29x**  |
+| 3.4.9  | `load_and_resolve.rb` | 1.54x / **2.49x**     | 1.50x / **2.41x**      |
+| 4.0.4  | `load_only.rb`        | **0.97x** / **1.49x** | **0.70x** / **1.33x**  |
+| 4.0.4  | `load_and_resolve.rb` | 1.56x / **2.24x**     | 1.50x / **2.27x**      |
+
+Bold cells in the fast column are the headline speedup for that row;
+bold elsewhere flags cells where librbs trails pure RBS.
 
 ## load_only.rb
 
 `from_loader` + materialize (`class_decls.size` triggers
 `Native.materialize_all`).
 
-| size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
-|--------|-----------|-----------------|-----------|---------------------|-----------|
-| small  |  156.2 ms |        154.6 ms |     1.01x |             89.6 ms |     1.74x |
-| large  | 1184.4 ms |        709.8 ms |     1.67x |            379.3 ms |     3.12x |
+| ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
+|--------|-------|-----------|-----------------|-----------|---------------------|-----------|
+| 3.3.11 | small |   48.4 ms |         41.0 ms |     1.18x |             27.2 ms |     1.78x |
+| 3.3.11 | large | 1062.4 ms |        468.5 ms |     2.27x |            219.7 ms |     4.84x |
+| 3.4.9  | small |   40.6 ms |         35.9 ms |     1.13x |             27.1 ms |     1.50x |
+| 3.4.9  | large |  261.7 ms |        342.8 ms |     0.76x |            202.3 ms |     1.29x |
+| 4.0.4  | small |   33.3 ms |         34.5 ms |     0.97x |             22.3 ms |     1.49x |
+| 4.0.4  | large |  227.6 ms |        325.6 ms |     0.70x |            171.7 ms |     1.33x |
 
 ## load_and_resolve.rb
 
 `from_loader` + `resolve_type_names` + materialize.
 
-| size   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
-|--------|-----------|-----------------|-----------|---------------------|-----------|
-| small  |  289.0 ms |        161.6 ms |     1.79x |             98.6 ms |     2.93x |
-| large  | 3308.1 ms |        824.0 ms |     4.01x |            409.5 ms |     8.08x |
+| ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
+|--------|-------|-----------|-----------------|-----------|---------------------|-----------|
+| 3.3.11 | small |   89.5 ms |         42.4 ms |     2.11x |             26.4 ms |     3.39x |
+| 3.3.11 | large | 2115.8 ms |        431.8 ms |     4.90x |            219.7 ms |     9.63x |
+| 3.4.9  | small |   58.4 ms |         37.9 ms |     1.54x |             23.5 ms |     2.49x |
+| 3.4.9  | large |  514.4 ms |        342.8 ms |     1.50x |            213.7 ms |     2.41x |
+| 4.0.4  | small |   51.4 ms |         33.0 ms |     1.56x |             22.9 ms |     2.24x |
+| 4.0.4  | large |  391.9 ms |        260.6 ms |     1.50x |            173.0 ms |     2.27x |
 
-## Resolve-only cost (load_and_resolve − load_only)
+## Cross-Ruby observations
 
-| size  | pure RBS  | librbs (normal) | librbs (fast alloc)                   |
-|-------|-----------|-----------------|---------------------------------------|
-| small |  132.8 ms |          7.0 ms |   9.0 ms (≈0, within run-to-run noise)|
-| large | 2123.7 ms |        114.2 ms |  30.2 ms                              |
-
-In librbs the resolve phase is essentially free — every visible difference
-between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~120ms (small) to ~2.1s (large) inside `resolve_type_names`, so
-that step alone accounts for the bulk of the resolve-path gap.
+- Pure RBS gets dramatically faster on 3.4+. `large` `load_only` drops
+  from ~1060 ms on 3.3.11 to ~260 ms on 3.4.9 and ~230 ms on 4.0.4 —
+  Ruby 3.4 makes Prism the default parser, and the same effect carries
+  into `resolve_type_names` (large pure RBS resolve cost falls from
+  ~1050 ms on 3.3.11 to ~250 ms / ~165 ms on 3.4 / 4.0).
+- librbs **normal** mode now loses to pure RBS on 3.4+ `large`
+  `load_only` (0.76x / 0.70x). The materializer's `:initialize` funcalls
+  cost more than what librbs saves on the parser side once pure RBS has
+  Prism. The 3.3.11 numbers (2.27x normal) are no longer representative
+  of the upstream path on current Ruby — the **fast alloc** bypass is
+  the only librbs config that still wins everywhere.
+- **Fast alloc** retains a clear margin on every cell: small 1.49x–1.78x
+  (load_only) / 2.24x–3.39x (load_and_resolve), large 1.29x–4.84x /
+  2.27x–9.63x. The 3.3.11 large `load_and_resolve` 9.63x is the high
+  watermark; on 3.4+ it compresses to ~2.3x because pure RBS shrank,
+  not because librbs slowed down (fast-alloc large `load_only` only
+  drops from 220 ms to ~170 ms across the three Rubies).
+- The resolve phase remains essentially free in librbs across every
+  Ruby (`load_and_resolve` − `load_only` is within run-to-run noise for
+  both normal and fast columns), so the speedup compression on 3.4+ is
+  entirely explained by pure RBS getting faster, not by librbs
+  regressing.
 
 ## Notes captured during the run
 
@@ -89,10 +129,8 @@ that step alone accounts for the bulk of the resolve-path gap.
     funcall pair, the `rbs_check_location` re-lookup that
     `location_initialize` does, and the two `FIX2INT` round-trips on
     `start` / `end` (we already have them as `i32`s out of the parser).
-    On a same-machine A/B (best of 8 cold runs each) `large` load_only
-    moved from 631.2 ms → 572.3 ms (−9%) with no measurable change on
-    `small` — the per-call savings only surface above the noise floor
-    on workloads with enough Location allocations.
+    Per-call savings only surface above the noise floor on workloads
+    with enough Location allocations.
   - Static Ruby `Symbol` values used by the materializer (kind /
     visibility / variance keywords, the `Overload` const-get key) are
     pre-interned once on `MaterializeCtx::common`, and interner-backed
@@ -136,18 +174,9 @@ that step alone accounts for the bulk of the resolve-path gap.
     hits zero `rb_intern2` calls. `Types::Record` is intentionally
     excluded — its upstream `initialize` splits `all_fields` into
     `@fields` / `@optional_fields`, which would need replicating in
-    Rust. Effect on the corpus measured above:
-
-    | script                | size  | normal   | fast     | delta f-vs-n |
-    |-----------------------|-------|----------|----------|--------------|
-    | `load_only.rb`        | small |  154.6 ms|   89.6 ms|       −42.0% |
-    | `load_only.rb`        | large |  709.8 ms|  379.3 ms|       −46.6% |
-    | `load_and_resolve.rb` | small |  161.6 ms|   98.6 ms|       −39.0% |
-    | `load_and_resolve.rb` | large |  824.0 ms|  409.5 ms|       −50.3% |
-
-    For the `large` cells the kwargs `Hash` allocation + `:initialize`
-    funcall dominated the materializer budget; eliminating those
-    halves the librbs cost. The single `LIBRBS_FAST_ALLOC` env var
-    continues to gate every call site so downstream users have one
-    knob to flip if upstream RBS ever changes an `initialize` we've
-    inlined.
+    Rust. The kwargs `Hash` allocation + `:initialize` funcall it
+    eliminates dominates the materializer budget on `large` corpora
+    — see the `normal` vs `fast alloc` columns in the per-Ruby tables
+    above. The single `LIBRBS_FAST_ALLOC` env var continues to gate
+    every call site so downstream users have one knob to flip if
+    upstream RBS ever changes an `initialize` we've inlined.

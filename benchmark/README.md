@@ -14,12 +14,17 @@ gem install benchmark-ips    # only needed if you call BenchHelpers.measure_ips
 ### Large-size collection (one-shot)
 
 The `large` size loads gem signatures via an `rbs_collection.lock.yaml`
-vendored from [SeleniumHQ/selenium][sel] (33 gems pinned to a specific
-[gem_rbs_collection][grc] revision). Populate the local cache once:
+vendored from [kaigionrails/conference-app][ca] (92 gems pinned to a
+specific [gem_rbs_collection][grc] revision). Some entries are
+`type: rubygems` — their sigs ship inside the gems themselves
+(`<gem>/sig/`), so the gems must be installed locally for RBS to find
+them. `benchmark/fixtures/Gemfile{,.lock}` is vendored from
+conference-app for this; run both setup steps once:
 
 ```sh
 cd benchmark/fixtures
-bundle exec rbs --collection selenium.rbs_collection.yaml \
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle install
+bundle exec rbs --collection conference_app.rbs_collection.yaml \
   collection install --frozen
 cd -
 ```
@@ -27,13 +32,16 @@ cd -
 (`--collection` is an option of the top-level `rbs` command, not of
 `collection install`, so the flag has to come before the subcommand.)
 
-This clones gem_rbs_collection at the pinned SHA into
-`benchmark/fixtures/.gem_rbs_collection/` (gitignored). To swap in a
-different OSS project's lockfile, replace
-`benchmark/fixtures/selenium.rbs_collection.{yaml,lock.yaml}` and re-run
-the install command.
+The collection install clones gem_rbs_collection at the pinned SHA into
+`benchmark/fixtures/.gem_rbs_collection/` (gitignored). The bundle
+install populates the system gem path so `type: rubygems` sigs (herb,
+reactionview, base64, bigdecimal, prism) resolve at bench time — the
+bench harness strips bundler env from the child process so any locally
+installed gem is visible. To swap in a different OSS project's
+lockfile, replace `benchmark/fixtures/conference_app.rbs_collection.{yaml,lock.yaml}`
+(and `Gemfile{,.lock}` if the gem set differs) and re-run both steps.
 
-[sel]: https://github.com/SeleniumHQ/selenium/blob/trunk/rb/rbs_collection.lock.yaml
+[ca]: https://github.com/kaigionrails/conference-app/blob/main/rbs_collection.lock.yaml
 [grc]: https://github.com/ruby/gem_rbs_collection
 
 ## Running
@@ -82,10 +90,10 @@ purely the cost of `resolve_type_names`.
 Defined in `helpers.rb` under `BenchHelpers::SIZES`:
 
 - `small` — core only (no extra `loader.add`).
-- `large` — core + the gem RBS collection produced by SeleniumHQ/selenium's
-  `rbs_collection.lock.yaml` (~33 external gems via gem_rbs_collection).
+- `large` — core + the gem RBS collection produced by kaigionrails/conference-app's
+  `rbs_collection.lock.yaml` (~92 external gems via gem_rbs_collection).
   Requires the one-shot `rbs collection install` step described above.
 
 ## Recording results
 
-Captured tables live under `benchmark/results/`.
+Captured tables live in `benchmark/summary.md`.

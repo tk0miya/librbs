@@ -21,3 +21,6 @@ target/
 /bin/*
 !/bin/console
 !/bin/setup
+
+# Local rbenv ruby pin — varies by contributor and across bench runs.
+/.ruby-version
