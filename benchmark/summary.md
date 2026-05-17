@@ -29,9 +29,9 @@ the on-run are within run-to-run jitter).
 
 | ruby   | small (normal / fast) | large (normal / fast)  |
 |--------|-----------------------|------------------------|
-| 3.3.11 | 2.51x / **4.39x**     | 6.09x / **10.60x**     |
-| 3.4.9  | 1.63x / **2.72x**     | 1.38x / **2.35x**      |
-| 4.0.4  | 1.88x / **2.77x**     | 1.21x / **2.60x**      |
+| 3.3.11 | 2.37x / **4.27x**     | 5.59x / **10.76x**     |
+| 3.4.9  | 1.74x / **2.73x**     | 1.40x / **2.45x**      |
+| 4.0.4  | 1.92x / **2.70x**     | 1.57x / **2.62x**      |
 
 Bold cells are the headline speedup for that row.
 
@@ -43,12 +43,12 @@ fully realized Ruby state on both sides.
 
 | ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-------|-----------|-----------------|-----------|---------------------|-----------|
-| 3.3.11 | small |  108.1 ms |         43.1 ms |     2.51x |             22.0 ms |     4.39x |
-| 3.3.11 | large | 2514.5 ms |        413.2 ms |     6.09x |            220.4 ms |    10.60x |
-| 3.4.9  | small |   61.0 ms |         37.3 ms |     1.63x |             22.2 ms |     2.72x |
-| 3.4.9  | large |  470.4 ms |        340.3 ms |     1.38x |            200.7 ms |     2.35x |
-| 4.0.4  | small |   54.6 ms |         29.1 ms |     1.88x |             19.2 ms |     2.77x |
-| 4.0.4  | large |  419.1 ms |        346.5 ms |     1.21x |            153.9 ms |     2.60x |
+| 3.3.11 | small |  102.4 ms |         43.3 ms |     2.37x |             22.7 ms |     4.27x |
+| 3.3.11 | large | 2337.3 ms |        418.0 ms |     5.59x |            214.3 ms |    10.76x |
+| 3.4.9  | small |   61.9 ms |         35.7 ms |     1.74x |             22.3 ms |     2.73x |
+| 3.4.9  | large |  469.7 ms |        336.5 ms |     1.40x |            194.2 ms |     2.45x |
+| 4.0.4  | small |   55.5 ms |         28.9 ms |     1.92x |             20.0 ms |     2.70x |
+| 4.0.4  | large |  399.4 ms |        254.8 ms |     1.57x |            153.8 ms |     2.62x |
 
 ## Cross-Ruby observations
 
@@ -153,6 +153,41 @@ fully realized Ruby state on both sides.
   meaningful payoff. The `gem_sig_path` and `repository.lookup`
   callbacks per lib stay on the Ruby side — funcall overhead is
   sub-µs per call so the ~92 libs on `large` add <0.1 ms total.
+- **`EnvironmentLoader` class swap (this revision).** The patch on
+  `RBS::EnvironmentLoader#load` was replaced by a full class swap:
+  `Librbs::Native::EnvironmentLoader` (a magnus-wrapped Rust struct)
+  is now `RBS::EnvironmentLoader` directly, no Ruby facade in the
+  middle. All loader state (`core_root`, `dirs`, `libs`) lives in
+  the wrapper's `Mutex<LoaderState>`; the wrapper additionally
+  holds the `RBS::Repository` reference as `Opaque<Value>` with
+  `DataTypeFunctions::mark` for GC. There is no pure-Rust loader
+  type in `librbs-core` because the loader's behaviour is uniformly
+  Ruby-coupled (`Library`, `UnknownLibraryError`, the
+  `gem_sig_path` / `repository.lookup` resolution chain, and the
+  `each_dir` block protocol all require Ruby callbacks), so the
+  thin `(core_root, dirs)` data holder that would have lived there
+  was dropped in favour of holding the fields directly on the
+  magnus wrapper. The Ruby side reopens the class to add the
+  kwargs `new` / `add` / `load` dispatchers, the `add_collection`
+  / `resolve_dependencies` orchestration (Ruby's `Lockfile` /
+  `Collection::Sources::*` are deeply Ruby), the `gem_sig_path`
+  class method, and the high-level readers (`core_root` →
+  `Pathname`, `libs` → `Set[Library]`). `Library`,
+  `UnknownLibraryError`, and `DEFAULT_CORE_ROOT` are re-exposed on
+  the replacement via `const_set`. Three upstream-internal methods
+  are intentionally dropped: `has_library?` /
+  `resolve_dependencies` (folded into `each_dir` /
+  `add_library`'s callback chain) and `each_signature` (the only
+  external caller was `spec/compat/gems_spec.rb`, switched to
+  `each_dir`; reimplementing in Ruby would reintroduce
+  `Parser.parse_signature` Ruby AST instantiation). The numbers in
+  the tables above are within run-to-run jitter of the prior
+  revision — this is a responsibility-allocation change, not a perf
+  change. The naming convention that came out of it: `Wrapped*`
+  prefix is reserved for *internal* handles stored on
+  `@__librbs_*` ivars (`WrappedEnvironment`, `WrappedResolution`);
+  the public-facing Rust struct that backs
+  `Librbs::Native::EnvironmentLoader` carries no prefix.
 - Materializer optimisations layered on top of the original baseline
   (all reflected in the librbs numbers above):
   - `TypeName` / `Namespace` are flyweighted by interner Sym, so the same
