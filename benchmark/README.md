@@ -96,4 +96,4 @@ Defined in `helpers.rb` under `BenchHelpers::SIZES`:
 
 ## Recording results
 
-Captured tables live under `benchmark/results/`.
+Captured tables live in `benchmark/summary.md`.

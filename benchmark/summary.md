@@ -1,4 +1,4 @@
-# M4 baseline benchmark
+# Cold-start benchmark results
 
 Date: 2026-05-17
 Environment: macOS 15 / Ruby 3.3.11, 3.4.9, 4.0.4 (rbenv-switched) / Darwin 24.6.0 (arm64-darwin24, M4 Mac)
@@ -24,6 +24,20 @@ for the env-var knob. `speedup_n` / `speedup_f` are pure-RBS divided
 by the matching librbs column. The pure-RBS column is taken from the
 fast-alloc-off run (the env var doesn't affect pure RBS; values from
 the on-run are within run-to-run jitter).
+
+## Speedups (recap)
+
+| ruby   | script                | small (normal / fast) | large (normal / fast)  |
+|--------|-----------------------|-----------------------|------------------------|
+| 3.3.11 | `load_only.rb`        | 1.18x / **1.78x**     | 2.27x / **4.84x**      |
+| 3.3.11 | `load_and_resolve.rb` | 2.11x / **3.39x**     | 4.90x / **9.63x**      |
+| 3.4.9  | `load_only.rb`        | 1.13x / **1.50x**     | **0.76x** / **1.29x**  |
+| 3.4.9  | `load_and_resolve.rb` | 1.54x / **2.49x**     | 1.50x / **2.41x**      |
+| 4.0.4  | `load_only.rb`        | **0.97x** / **1.49x** | **0.70x** / **1.33x**  |
+| 4.0.4  | `load_and_resolve.rb` | 1.56x / **2.24x**     | 1.50x / **2.27x**      |
+
+Bold cells in the fast column are the headline speedup for that row;
+bold elsewhere flags cells where librbs trails pure RBS.
 
 ## load_only.rb
 
