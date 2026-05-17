@@ -16,6 +16,11 @@ module Librbs
       # `(name, version)` tuples so the native side can attach the
       # original lib Value to `RBS::EnvironmentLoader::UnknownLibraryError`
       # via `lib:` — matching upstream's exception shape exactly.
+      # `repository` is passed as the live `RBS::Repository` instance
+      # because Rust calls `repository.lookup` on it directly; this
+      # has the same wall-time cost as a Rust-side index, and lets us
+      # delete the parallel Rust implementation that previously lived
+      # in `librbs_core::repository`.
       #
       # The returned Array is intentionally empty. Upstream returns a
       # `[[decl, path, source], ...]` list, but populating it would
@@ -35,7 +40,7 @@ module Librbs
           core_root&.to_s,
           libs.to_a,
           dirs,
-          repository.dirs.map(&:to_s)
+          repository
         )
 
         []

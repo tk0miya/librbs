@@ -124,10 +124,8 @@ fn walk_dir(dir: &Path, skip_hidden: bool, out: &mut Vec<PathBuf>) -> Result<()>
                 continue;
             }
             walk_dir(&path, skip_hidden, out)?;
-        } else if file_type.is_file() {
-            if name.ends_with(".rbs") {
-                out.push(path);
-            }
+        } else if file_type.is_file() && name.ends_with(".rbs") {
+            out.push(path);
         }
         // Symlinks: ignored. Upstream `Pathname.glob` with `**` does
         // not follow directory symlinks by default; we mirror that.
@@ -147,11 +145,7 @@ mod tests {
     impl TempTree {
         fn new(name: &str) -> Self {
             let mut root = std::env::temp_dir();
-            root.push(format!(
-                "librbs-discovery-{}-{}",
-                name,
-                std::process::id()
-            ));
+            root.push(format!("librbs-discovery-{}-{}", name, std::process::id()));
             let _ = fs::remove_dir_all(&root);
             fs::create_dir_all(&root).unwrap();
             Self { root }
