@@ -14,10 +14,6 @@ Speedups against pure RBS. `normal` is the upstream-initializer path,
 | `load_only.rb`        | 1.16x / **1.92x**      | 2.45x / **4.17x**     |
 | `load_and_resolve.rb` | 2.06x / **3.48x**      | 5.15x / **8.30x**     |
 
-Resolve cost in librbs is essentially zero on either side; pure RBS
-spends ~40ms (small) to ~1.2s (large) inside `resolve_type_names`.
-The M3d resolver port is unambiguously paying off.
-
 The load-only path on `large` clears 4x in fast-alloc mode and `small`
 sits a hair under 2x, after expanding the `obj_alloc + ivar_set`
 bypass beyond `Types::Bases::*` to cover every materializer call site
@@ -104,15 +100,6 @@ pure-Ruby env path is uniformly preserved across every patched method.
   the six decl hashes and `sources` Array (see followups.md §"Source
   materialization granularity"). That gives the M4a benefit "for free"
   on the new architecture.
-- The `small` load_only numbers used to sit within noise of pure RBS
-  (1.06x normal / 0.95x fast at baseline). The expanded fast-alloc
-  rev now puts them at 1.16x normal / 1.92x fast — i.e. the fast-alloc
-  toggle now pays off on `small` too, so the parser+loader fixed
-  cost is no longer the entire small-corpus story. Further wins on
-  `small` will still likely come from Core+Wrapper's lazier
-  materialisation rather than from more local materialiser tuning,
-  but the fast-alloc bypass is no longer leaving small wins on the
-  table.
 - If the Core+Wrapper rebuild slips, revisit this decision and implement
   M4a as a stopgap. The materialize.rs surface (~2.5kLoC across nine
   files) is large but the design in M4 §5 is unchanged.

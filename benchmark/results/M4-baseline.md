@@ -42,18 +42,6 @@ the on-run are within run-to-run jitter).
 | small  |   88.9 ms |         43.1 ms |     2.06x |             25.5 ms |     3.48x |
 | large  | 2254.0 ms |        438.0 ms |     5.15x |            287.6 ms |     8.30x |
 
-## Resolve-only cost (load_and_resolve − load_only)
-
-| size  | pure RBS  | librbs (normal) | librbs (fast alloc)                   |
-|-------|-----------|-----------------|---------------------------------------|
-| small |   40.2 ms |          1.1 ms |  -2.8 ms (≈0, within run-to-run noise)|
-| large | 1216.2 ms |         13.6 ms |  69.7 ms (≈0, within run-to-run noise)|
-
-In librbs the resolve phase is essentially free — every visible difference
-between the two scripts on the librbs side is run-to-run jitter. Pure RBS
-spends ~40ms (small) to ~1.2s (large) inside `resolve_type_names`, so
-that step alone accounts for the bulk of the resolve-path gap.
-
 ## Notes captured during the run
 
 - The bench harness leaked `BUNDLE_GEMFILE` / `RUBYOPT` into the subprocess
