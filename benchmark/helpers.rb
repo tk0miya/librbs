@@ -9,7 +9,7 @@
 #
 # Run benchmarks via `bundle exec`, e.g.:
 #
-#     bundle exec ruby benchmark/load_and_resolve.rb
+#     bundle exec ruby benchmark/benchmark.rb
 #
 # `bundle exec` propagates RUBYOPT to children so the gem environment is
 # consistent between parent and child processes.

@@ -46,13 +46,16 @@ lockfile, replace `benchmark/fixtures/conference_app.rbs_collection.{yaml,lock.y
 
 ## Running
 
-Each script drives one workload across two sizes (`small` and `large`)
-and both implementations (pure RBS and librbs), then prints a Markdown
-table with cold-start wall times and the librbs speedup.
+The bench drives one workload — `from_loader` + `resolve_type_names`
++ materialize, the full "give me a usable RBS::Environment" pipeline
+— across two sizes (`small` and `large`) and both implementations
+(pure RBS and librbs), then prints a Markdown table with cold-start
+wall times and the librbs speedup. `class_decls.size` at the end of
+the timed block forces the librbs path's one-shot `materialize_all`
+so we are comparing fully realized Ruby state on both sides.
 
 ```sh
-bundle exec ruby benchmark/load_only.rb
-bundle exec ruby benchmark/load_and_resolve.rb
+bundle exec ruby benchmark/benchmark.rb
 ```
 
 The pure-RBS and librbs cases run in **separate Ruby subprocesses** —
@@ -62,28 +65,16 @@ subprocess plumbing.
 
 ### Toggling the `obj_alloc + ivar_set` fast path
 
-librbs's bypass of upstream initializers (currently `Types::Bases::*`)
-is gated at runtime by `LIBRBS_FAST_ALLOC`. Default is on; set it to
-`0` to fall back to the upstream `Class#new` path. The bench
-subprocess inherits this from the parent shell, so a normal-vs-fast
-comparison is just two invocations:
+librbs's bypass of upstream initializers is gated at runtime by
+`LIBRBS_FAST_ALLOC`. Default is on; set it to `0` to fall back to
+the upstream `Class#new` path. The bench subprocess inherits this
+from the parent shell, so a normal-vs-fast comparison is just two
+invocations:
 
 ```sh
-bundle exec ruby benchmark/load_only.rb                       # fast alloc on (default)
-LIBRBS_FAST_ALLOC=0 bundle exec ruby benchmark/load_only.rb   # bypass off (normal)
+bundle exec ruby benchmark/benchmark.rb                       # fast alloc on (default)
+LIBRBS_FAST_ALLOC=0 bundle exec ruby benchmark/benchmark.rb   # bypass off (normal)
 ```
-
-## What each script measures
-
-Both scripts run `class_decls.size` at the end so the librbs path
-finishes its one-shot `materialize_all` and we are comparing fully
-realized Ruby state on both sides. The difference between the two is
-purely the cost of `resolve_type_names`.
-
-| script | workload |
-|---|---|
-| `load_only.rb` | `from_loader` + materialize |
-| `load_and_resolve.rb` | `from_loader` + `resolve_type_names` + materialize |
 
 ## Sizes
 
