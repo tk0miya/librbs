@@ -5,19 +5,16 @@ Environment: macOS 15 / Ruby 3.3.11, 3.4.9, 4.0.4 (rbenv-switched) / Darwin 24.6
 
 Wall time, minimum across runs per cell (each subprocess takes its own
 min-of-3 internally, then min-of-N outer invocations is reported here).
-Each (impl, size, ruby) triple runs in its own subprocess (`require
-"librbs"` patches `RBS::Environment` globally — see
-`benchmark/helpers.rb`). Ruby was switched via `rbenv`, with `bundle
-install` + `rake compile` rerun per version so each row uses a
-natively-compiled librbs against that Ruby.
+Each (impl, ruby) pair runs in its own subprocess (`require "librbs"`
+patches `RBS::Environment` globally — see `benchmark/helpers.rb`).
+Ruby was switched via `rbenv`, with `bundle install` + `rake compile`
+rerun per version so each row uses a natively-compiled librbs against
+that Ruby.
 
-Sizes:
-
-- **small**: core only.
-- **large**: core + the gem RBS collection produced by kaigionrails/conference-app's
-  `rbs_collection.lock.yaml` (~92 gems via gem_rbs_collection, plus
-  rubygems-sourced sigs such as `herb`, `reactionview`, `base64`,
-  `bigdecimal`, `prism`).
+Workload: core + the gem RBS collection produced by
+kaigionrails/conference-app's `rbs_collection.lock.yaml` (~92 gems via
+gem_rbs_collection, plus rubygems-sourced sigs such as `herb`,
+`reactionview`, `base64`, `bigdecimal`, `prism`).
 
 librbs is reported in two columns — **normal** (upstream
 `Class#new` initializers) and **fast alloc** (the `obj_alloc +
@@ -27,43 +24,28 @@ by the matching librbs column. The pure-RBS column is taken from the
 fast-alloc-off run (the env var doesn't affect pure RBS; values from
 the on-run are within run-to-run jitter).
 
-## Speedups (recap)
-
-| ruby   | small (normal / fast) | large (normal / fast)  |
-|--------|-----------------------|------------------------|
-| 3.3.11 | 1.67x / **4.59x**     | 6.26x / **11.59x**     |
-| 3.4.9  | 1.75x / **2.40x**     | 1.36x / **2.30x**      |
-| 4.0.4  | 1.75x / **2.35x**     | 1.58x / **3.11x**      |
-
-Bold cells are the headline speedup for that row.
-
-## Details
+## Results
 
 `from_loader` + `resolve_type_names` + materialize. The trailing
 `class_decls.size` triggers `Native.materialize_all` so we are comparing
 fully realized Ruby state on both sides.
 
-| ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
-|--------|-------|-----------|-----------------|-----------|---------------------|-----------|
-| 3.3.11 | small |   92.2 ms |         55.2 ms |     1.67x |             20.1 ms |     4.59x |
-| 3.3.11 | large | 2462.4 ms |        393.6 ms |     6.26x |            212.5 ms |    11.59x |
-| 3.4.9  | small |   58.9 ms |         33.6 ms |     1.75x |             24.5 ms |     2.40x |
-| 3.4.9  | large |  452.4 ms |        333.6 ms |     1.36x |            197.1 ms |     2.30x |
-| 4.0.4  | small |   52.8 ms |         30.1 ms |     1.75x |             22.5 ms |     2.35x |
-| 4.0.4  | large |  411.7 ms |        260.5 ms |     1.58x |            132.3 ms |     3.11x |
+| ruby   | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
+|--------|-----------|-----------------|-----------|---------------------|-----------|
+| 3.3.11 | 2462.4 ms |        393.6 ms |     6.26x |            212.5 ms |    11.59x |
+| 3.4.9  |  452.4 ms |        333.6 ms |     1.36x |            197.1 ms |     2.30x |
+| 4.0.4  |  411.7 ms |        260.5 ms |     1.58x |            132.3 ms |     3.11x |
 
 ## Cross-Ruby observations
 
-- Pure RBS gets dramatically faster on 3.4+. `large` pure-RBS time
-  drops from ~2460 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on
-  4.0.4 — Ruby 3.4 makes Prism the default parser, and the same
-  effect compresses the librbs speedup ratio without librbs itself
-  slowing down (fast-alloc large stays in the 130–215 ms band across
-  every Ruby).
-- **Fast alloc** retains a clear margin on every cell: small
-  2.35x–4.59x, large 2.30x–11.59x. The 3.3.11 large 11.59x is the
-  high watermark; on 3.4+ it compresses to ~2.3–3.1x because pure
-  RBS shrank, not because librbs regressed.
+- Pure RBS gets dramatically faster on 3.4+. Pure-RBS time drops from
+  ~2460 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on 4.0.4 — Ruby
+  3.4 makes Prism the default parser, and the same effect compresses
+  the librbs speedup ratio without librbs itself slowing down
+  (fast-alloc stays in the 130–215 ms band across every Ruby).
+- **Fast alloc** retains a clear margin on every Ruby: 2.30x–11.59x.
+  The 3.3.11 11.59x is the high watermark; on 3.4+ it compresses to
+  ~2.3–3.1x because pure RBS shrank, not because librbs regressed.
 - The resolve phase is essentially free in librbs across every Ruby.
   The previous two-script bench split `load_only` vs `load_and_resolve`
   and the librbs-side difference stayed within run-to-run noise on
@@ -88,8 +70,8 @@ fully realized Ruby state on both sides.
   even though `Bundler.unbundled_env` was used, because `Open3.capture3`
   inherits the parent env for keys absent from the override hash.
   `BenchHelpers.unbundled_env` now explicitly sets the absent keys to `nil`
-  so Open3 removes them in the child. Without this fix the `large` size's
-  pure-RBS subprocess could not find gem-installed sigs (e.g. `webrick`).
+  so Open3 removes them in the child. Without this fix the pure-RBS
+  subprocess could not find gem-installed sigs (e.g. `webrick`).
 - `librbs::Native.build_environment` previously rejected libraries sourced
   from installed gems (`type: rubygems` in the collection lockfile —
   `webrick`, `prism`, ...) with `unknown library: <name>`. The Rust
@@ -103,7 +85,7 @@ fully realized Ruby state on both sides.
   previously running entirely on the Ruby side: `RBS::FileFinder.each_file`
   +`Pathname.glob` walked every `.rbs` directory, and
   `RBS::Repository::GemRBS#load!` did the per-gem version enumeration via
-  `Pathname#each_child`. Stackprof on Ruby 4.0.4 / large showed Ruby's
+  `Pathname#each_child`. Stackprof on Ruby 4.0.4 showed Ruby's
   `Dir.glob` / `Dir.open` + `File.basename` taking 63% of `from_loader`,
   and `Pathname#children` taking another 78% of what remained after that
   was ported. Both are now in Rust:
@@ -128,7 +110,7 @@ fully realized Ruby state on both sides.
     declarative lines that hand the loader's configuration to Rust;
     `each_dir` / `FileFinder` no longer run on the Ruby side.
   
-  Effect on Ruby 4.0.4 / large: from_loader phase dropped from ~56 ms
+  Effect on Ruby 4.0.4: from_loader phase dropped from ~56 ms
   (Ruby `Dir.glob` + `Pathname#children`) to ~30 ms (mostly the Rust
   parser plus the `gem_sig_path` callback chain, ~13% of `from_loader`).
   Total bench wall time moved from 174.9 ms (2.45x) to 132.7 ms (3.07x).
@@ -145,16 +127,16 @@ fully realized Ruby state on both sides.
   already memoizes via the `@versions` hash, so the cache benefit
   the Rust index was supposed to add was already provided by the
   upstream code we were replacing. The numbers in the tables above
-  reflect the post-revert state and are 5–10 ms higher on `large`
-  than what the Rust-Repository revision recorded (3.3.11: 220.4
-  vs 185.9 fast, 4.0.4: 153.9 vs 132.7 fast). The ~500 lines of
-  Rust + the dedicated `Librbs::Native::Repository` class were
-  judged not worth the ~10 ms wall-time delta on a workload
-  measured in hundreds of ms, especially since carrying our own
-  `Repository` semantics meant tracking upstream changes for no
-  meaningful payoff. The `gem_sig_path` and `repository.lookup`
-  callbacks per lib stay on the Ruby side — funcall overhead is
-  sub-µs per call so the ~92 libs on `large` add <0.1 ms total.
+  reflect the post-revert state and are 5–10 ms higher than what the
+  Rust-Repository revision recorded (3.3.11: 220.4 vs 185.9 fast,
+  4.0.4: 153.9 vs 132.7 fast). The ~500 lines of Rust + the dedicated
+  `Librbs::Native::Repository` class were judged not worth the ~10 ms
+  wall-time delta on a workload measured in hundreds of ms, especially
+  since carrying our own `Repository` semantics meant tracking
+  upstream changes for no meaningful payoff. The `gem_sig_path` and
+  `repository.lookup` callbacks per lib stay on the Ruby side —
+  funcall overhead is sub-µs per call so the ~92 libs add <0.1 ms
+  total.
 - **`EnvironmentLoader` class swap (this revision).** The patch on
   `RBS::EnvironmentLoader#load` was replaced by a full class swap:
   `Librbs::Native::EnvironmentLoader` (a magnus-wrapped Rust struct)
@@ -209,7 +191,7 @@ fully realized Ruby state on both sides.
     `rb_check_typeddata` re-lookup, `rb_sym2id`, `NUM2INT`, and the
     Symbol allocation that the underscore-prefixed Ruby primitives
     would otherwise perform on every child append.
-  - `RBS::Location` instances themselves (≈91k for the `large` corpus)
+  - `RBS::Location` instances themselves (≈91k for the bench corpus)
     are constructed via the same dlsym bridge into upstream's
     `rbs_new_location2(VALUE buffer, int start_char, int end_char)`,
     which calls `TypedData_Make_Struct` + `rbs_loc_init` directly. That
@@ -263,7 +245,7 @@ fully realized Ruby state on both sides.
     excluded — its upstream `initialize` splits `all_fields` into
     `@fields` / `@optional_fields`, which would need replicating in
     Rust. The kwargs `Hash` allocation + `:initialize` funcall it
-    eliminates dominates the materializer budget on `large` corpora
+    eliminates dominates the materializer budget on the bench corpus
     — see the `normal` vs `fast alloc` columns in the per-Ruby tables
     above. The single `LIBRBS_FAST_ALLOC` env var continues to gate
     every call site so downstream users have one knob to flip if

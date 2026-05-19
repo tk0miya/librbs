@@ -20,27 +20,16 @@ require "rbconfig"
 module BenchHelpers
   ROOT = File.expand_path("..", __dir__)
 
-  # Library / collection lists for each measurement size.
-  # `EnvironmentLoader.new` already bundles the core signatures, so the
-  # small case adds nothing on top.
-  #
-  # `:large` references an `rbs_collection.lock.yaml` vendored from a
-  # real-world OSS project (kaigionrails/conference-app). Before running
-  # the large case, populate both the collection cache and the gem path
-  # (some sigs are `type: rubygems` and ship inside the gem itself):
+  # The bench workload loads core + an `rbs_collection.lock.yaml` vendored
+  # from a real-world OSS project (kaigionrails/conference-app). Before
+  # running, populate both the collection cache and the gem path (some
+  # sigs are `type: rubygems` and ship inside the gem itself):
   #
   #     cd benchmark/fixtures && \
   #       BUNDLE_GEMFILE="$PWD/Gemfile" bundle install && \
   #       bundle exec rbs collection install \
   #         --collection conference_app.rbs_collection.yaml --frozen
-  SIZES = {
-    small: {
-      libraries: []
-    },
-    large: {
-      collection: "fixtures/conference_app.rbs_collection.lock.yaml"
-    }
-  }.freeze
+  COLLECTION_LOCKFILE = "fixtures/conference_app.rbs_collection.lock.yaml"
 
   IMPLS = %i[pure_rbs librbs].freeze
 
@@ -69,30 +58,25 @@ module BenchHelpers
     base
   end
 
-  def loader_setup(size)
-    spec = SIZES.fetch(size)
-    lines = ["loader = RBS::EnvironmentLoader.new"]
-    Array(spec[:libraries]).each { |l| lines << "loader.add(library: #{l.inspect})" }
-    if (collection_rel = spec[:collection])
-      lock_abs = File.expand_path(collection_rel, __dir__)
-      cache_dir = File.join(File.dirname(lock_abs), ".gem_rbs_collection")
-      lines << <<~RUBY
-        require "yaml"
-        _lock_path = Pathname(#{lock_abs.inspect})
-        unless File.directory?(#{cache_dir.inspect})
-          abort "[bench] collection cache missing at #{cache_dir} -- run: " \\
-                "cd benchmark/fixtures && bundle exec rbs " \\
-                "--collection conference_app.rbs_collection.yaml " \\
-                "collection install --frozen"
-        end
-        _lockfile = RBS::Collection::Config::Lockfile.from_lockfile(
-          lockfile_path: _lock_path,
-          data: YAML.load_file(_lock_path)
-        )
-        loader.add_collection(_lockfile)
-      RUBY
-    end
-    lines.join("\n")
+  def loader_setup
+    lock_abs = File.expand_path(COLLECTION_LOCKFILE, __dir__)
+    cache_dir = File.join(File.dirname(lock_abs), ".gem_rbs_collection")
+    <<~RUBY
+      loader = RBS::EnvironmentLoader.new
+      require "yaml"
+      _lock_path = Pathname(#{lock_abs.inspect})
+      unless File.directory?(#{cache_dir.inspect})
+        abort "[bench] collection cache missing at #{cache_dir} -- run: " \\
+              "cd benchmark/fixtures && bundle exec rbs " \\
+              "--collection conference_app.rbs_collection.yaml " \\
+              "collection install --frozen"
+      end
+      _lockfile = RBS::Collection::Config::Lockfile.from_lockfile(
+        lockfile_path: _lock_path,
+        data: YAML.load_file(_lock_path)
+      )
+      loader.add_collection(_lockfile)
+    RUBY
   end
 
   def requires_for(impl)
@@ -147,12 +131,12 @@ module BenchHelpers
   # in real Steep usage.
   #
   # Returns the minimum of `repeats` runs (least noisy estimate).
-  def measure_realtime(impl:, size:, expr:, repeats: 3)
+  def measure_realtime(impl:, expr:, repeats: 3)
     body = <<~RUBY
       require "benchmark"
       times = []
       #{repeats}.times do
-        #{loader_setup(size)}
+        #{loader_setup}
         GC.start
         times << Benchmark.realtime do
           #{expr}
@@ -168,13 +152,13 @@ module BenchHelpers
   # `measure_realtime` above.
   #
   # Returns ips (Float).
-  def measure_ips(impl:, size:, expr:, warmup: 1, time: 3)
+  def measure_ips(impl:, expr:, warmup: 1, time: 3)
     body = <<~RUBY
       require "benchmark/ips"
       job = Benchmark::IPS::Job.new
       job.config(warmup: #{warmup}, time: #{time}, quiet: true)
       job.item("bench") do
-        #{loader_setup(size)}
+        #{loader_setup}
         #{expr}
       end
       job.run
@@ -192,19 +176,16 @@ module BenchHelpers
     format("%.2fx", pure / lib)
   end
 
-  # Drives a single benchmark across all SIZES × {pure_rbs, librbs} and
-  # prints a Markdown table. `expr` is the workload string evaluated inside
-  # the timed block; it has access to the local `loader` from
-  # `loader_setup`.
-  def report_realtime(title:, expr:, repeats: 3, sizes: SIZES.keys)
+  # Drives a single benchmark across {pure_rbs, librbs} and prints a
+  # Markdown table. `expr` is the workload string evaluated inside the
+  # timed block; it has access to the local `loader` from `loader_setup`.
+  def report_realtime(title:, expr:, repeats: 3)
     puts "## #{title}"
     puts
-    rows = sizes.map do |size|
-      pure = measure_realtime(impl: :pure_rbs, size: size, expr: expr, repeats: repeats)
-      lib  = measure_realtime(impl: :librbs,   size: size, expr: expr, repeats: repeats)
-      [size.to_s, format_ms(pure), format_ms(lib), format_speedup(pure, lib)]
-    end
-    print_table(["size", "pure RBS", "librbs", "speedup"], rows)
+    pure = measure_realtime(impl: :pure_rbs, expr: expr, repeats: repeats)
+    lib  = measure_realtime(impl: :librbs,   expr: expr, repeats: repeats)
+    rows = [[format_ms(pure), format_ms(lib), format_speedup(pure, lib)]]
+    print_table(["pure RBS", "librbs", "speedup"], rows)
     puts
   end
 
