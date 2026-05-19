@@ -1,7 +1,0 @@
-[workspace]
-members = [
-  "ruby-rbs",
-  "ruby-rbs-sys",
-]
-
-resolver = "3"
