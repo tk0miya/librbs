@@ -10,9 +10,9 @@ bundle exec rake compile     # build the librbs native extension
 gem install benchmark-ips    # only needed if you call BenchHelpers.measure_ips
 ```
 
-### Large-size collection (one-shot)
+### Collection (one-shot)
 
-The `large` size loads gem signatures via an `rbs_collection.lock.yaml`
+The bench loads gem signatures via an `rbs_collection.lock.yaml`
 vendored from [kaigionrails/conference-app][ca] (92 gems pinned to a
 specific [gem_rbs_collection][grc] revision). Some entries are
 `type: rubygems` — their sigs ship inside the gems themselves
@@ -47,11 +47,11 @@ lockfile, replace `benchmark/fixtures/conference_app.rbs_collection.{yaml,lock.y
 
 The bench drives one workload — `from_loader` + `resolve_type_names`
 + materialize, the full "give me a usable RBS::Environment" pipeline
-— across two sizes (`small` and `large`) and both implementations
-(pure RBS and librbs), then prints a Markdown table with wall times
-and the librbs speedup. `class_decls.size` at the end of
-the timed block forces the librbs path's one-shot `materialize_all`
-so we are comparing fully realized Ruby state on both sides.
+— against both implementations (pure RBS and librbs), then prints a
+Markdown table with wall times and the librbs speedup.
+`class_decls.size` at the end of the timed block forces the librbs
+path's one-shot `materialize_all` so we are comparing fully realized
+Ruby state on both sides.
 
 ```sh
 bundle exec ruby benchmark/benchmark.rb
@@ -75,14 +75,13 @@ bundle exec ruby benchmark/benchmark.rb                       # fast alloc on (d
 LIBRBS_FAST_ALLOC=0 bundle exec ruby benchmark/benchmark.rb   # bypass off (normal)
 ```
 
-## Sizes
+## Workload
 
-Defined in `helpers.rb` under `BenchHelpers::SIZES`:
-
-- `small` — core only (no extra `loader.add`).
-- `large` — core + the gem RBS collection produced by kaigionrails/conference-app's
-  `rbs_collection.lock.yaml` (~92 external gems via gem_rbs_collection).
-  Requires the one-shot `rbs collection install` step described above.
+Core signatures + the gem RBS collection produced by
+kaigionrails/conference-app's `rbs_collection.lock.yaml` (~92 external
+gems via gem_rbs_collection). Requires the one-shot `rbs collection
+install` step described above. See `BenchHelpers::COLLECTION_LOCKFILE`
+in `helpers.rb` for the exact path.
 
 ## Recording results
 
