@@ -13,7 +13,7 @@ Gem::Specification.new do |spec|
                      "monkey-patching RBS with a Rust implementation. Drop-in: " \
                      'just `require "librbs"`.'
   spec.homepage = "https://github.com/tk0miya/librbs"
-  spec.required_ruby_version = ">= 3.2"
+  spec.required_ruby_version = ">= 3.3"
   spec.platform = Gem::Platform::RUBY
 
   spec.metadata["homepage_uri"] = spec.homepage

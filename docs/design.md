@@ -275,7 +275,7 @@ end
 | Ruby ↔ Rust bridge | `magnus` + `rb-sys` |
 | Extension build | `rb-sys-build` + `rake-compiler`; `extconf.rb` invokes `cargo build --release` |
 | Distribution | `oxidize-rb/cross-gem-action` for Linux x86_64/aarch64 and macOS x86_64/arm64 (4 targets) |
-| Ruby support | 3.2 / 3.3 / 3.4 / 4.0 |
+| Ruby support | 3.3 / 3.4 / 4.0 |
 | Parallelism | `rayon` |
 | Hashing | `rustc-hash` (`FxHashMap`) |
 
@@ -287,7 +287,7 @@ end
 |---|---|
 | `rust-test` | matrix: ubuntu / macos × stable Rust. `cargo test --workspace` |
 | `rust-lint` | `cargo fmt --check`, `cargo clippy -- -D warnings` |
-| `ruby-test` | matrix: ruby 3.2 / 3.3 / 3.4 / 4.0 × ubuntu / macos. rake-compiler build + rspec |
+| `ruby-test` | matrix: ruby 3.3 / 3.4 / 4.0 × ubuntu / macos. rake-compiler build + rspec |
 | `compat-test` | **The core**. Run `from_loader → resolve_type_names` over core+stdlib+major gems and verify canonical-dump equality against pure RBS |
 | `bench` | benchmark-ips comparison vs pure RBS, posted to PR comments (M3 onward) |
 | `cross-gem-dryrun` | On release tags only: `oxidize-rb/cross-gem-action` build sanity check |
