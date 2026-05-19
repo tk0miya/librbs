@@ -1,13 +1,15 @@
 # Benchmark results
 
-Date: 2026-05-18
+Date: 2026-05-20
 Environment: macOS 15 / Ruby 3.3.11, 3.4.9, 4.0.4 (rbenv-switched) / Darwin 24.6.0 (arm64-darwin24, M4 Mac)
 
-Wall time, minimum of 3 runs per cell. Each (impl, size, ruby)
-triple runs in its own subprocess (`require "librbs"` patches
-`RBS::Environment` globally — see `benchmark/helpers.rb`). Ruby was
-switched via `rbenv`, with `bundle install` + `rake compile` rerun per
-version so each row uses a natively-compiled librbs against that Ruby.
+Wall time, minimum across runs per cell (each subprocess takes its own
+min-of-3 internally, then min-of-N outer invocations is reported here).
+Each (impl, size, ruby) triple runs in its own subprocess (`require
+"librbs"` patches `RBS::Environment` globally — see
+`benchmark/helpers.rb`). Ruby was switched via `rbenv`, with `bundle
+install` + `rake compile` rerun per version so each row uses a
+natively-compiled librbs against that Ruby.
 
 Sizes:
 
@@ -29,9 +31,9 @@ the on-run are within run-to-run jitter).
 
 | ruby   | small (normal / fast) | large (normal / fast)  |
 |--------|-----------------------|------------------------|
-| 3.3.11 | 2.51x / **4.39x**     | 6.09x / **10.60x**     |
-| 3.4.9  | 1.63x / **2.72x**     | 1.38x / **2.35x**      |
-| 4.0.4  | 1.88x / **2.77x**     | 1.21x / **2.60x**      |
+| 3.3.11 | 1.67x / **4.59x**     | 6.26x / **11.59x**     |
+| 3.4.9  | 1.75x / **2.40x**     | 1.36x / **2.30x**      |
+| 4.0.4  | 1.75x / **2.35x**     | 1.58x / **3.11x**      |
 
 Bold cells are the headline speedup for that row.
 
@@ -43,24 +45,24 @@ fully realized Ruby state on both sides.
 
 | ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-------|-----------|-----------------|-----------|---------------------|-----------|
-| 3.3.11 | small |  108.1 ms |         43.1 ms |     2.51x |             22.0 ms |     4.39x |
-| 3.3.11 | large | 2514.5 ms |        413.2 ms |     6.09x |            220.4 ms |    10.60x |
-| 3.4.9  | small |   61.0 ms |         37.3 ms |     1.63x |             22.2 ms |     2.72x |
-| 3.4.9  | large |  470.4 ms |        340.3 ms |     1.38x |            200.7 ms |     2.35x |
-| 4.0.4  | small |   54.6 ms |         29.1 ms |     1.88x |             19.2 ms |     2.77x |
-| 4.0.4  | large |  419.1 ms |        346.5 ms |     1.21x |            153.9 ms |     2.60x |
+| 3.3.11 | small |   92.2 ms |         55.2 ms |     1.67x |             20.1 ms |     4.59x |
+| 3.3.11 | large | 2462.4 ms |        393.6 ms |     6.26x |            212.5 ms |    11.59x |
+| 3.4.9  | small |   58.9 ms |         33.6 ms |     1.75x |             24.5 ms |     2.40x |
+| 3.4.9  | large |  452.4 ms |        333.6 ms |     1.36x |            197.1 ms |     2.30x |
+| 4.0.4  | small |   52.8 ms |         30.1 ms |     1.75x |             22.5 ms |     2.35x |
+| 4.0.4  | large |  411.7 ms |        260.5 ms |     1.58x |            132.3 ms |     3.11x |
 
 ## Cross-Ruby observations
 
 - Pure RBS gets dramatically faster on 3.4+. `large` pure-RBS time
-  drops from ~2100 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on
+  drops from ~2460 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on
   4.0.4 — Ruby 3.4 makes Prism the default parser, and the same
   effect compresses the librbs speedup ratio without librbs itself
-  slowing down (fast-alloc large drops from 186 ms on 3.3.11 to
-  ~135–200 ms across the 3.4+ Rubies).
+  slowing down (fast-alloc large stays in the 130–215 ms band across
+  every Ruby).
 - **Fast alloc** retains a clear margin on every cell: small
-  2.75x–3.53x, large 2.33x–11.13x. The 3.3.11 large 11.13x is the
-  high watermark; on 3.4+ it compresses to ~2.3–3.0x because pure
+  2.35x–4.59x, large 2.30x–11.59x. The 3.3.11 large 11.59x is the
+  high watermark; on 3.4+ it compresses to ~2.3–3.1x because pure
   RBS shrank, not because librbs regressed.
 - The resolve phase is essentially free in librbs across every Ruby.
   The previous two-script bench split `load_only` vs `load_and_resolve`
@@ -153,6 +155,47 @@ fully realized Ruby state on both sides.
   meaningful payoff. The `gem_sig_path` and `repository.lookup`
   callbacks per lib stay on the Ruby side — funcall overhead is
   sub-µs per call so the ~92 libs on `large` add <0.1 ms total.
+- **`EnvironmentLoader` class swap (this revision).** The patch on
+  `RBS::EnvironmentLoader#load` was replaced by a full class swap:
+  `Librbs::Native::EnvironmentLoader` (a magnus-wrapped Rust struct)
+  is now `RBS::EnvironmentLoader` directly, no Ruby facade in the
+  middle. The wrapper splits its fields by mutability / semantic
+  role: user-added sources (`dirs`, `libs`) live behind a single
+  `Mutex<Additions>` (mutable through `add(path:)` / `add(library:)`,
+  guarded so the two `Vec`s can be mutated through `&self` while
+  still satisfying magnus's `Send + Sync` requirement); `core_root`
+  is immutable after construction and sits directly on the wrapper
+  (no lock acquisition on read); `repository` is held as
+  `Opaque<Value>` outside the mutex so that
+  `DataTypeFunctions::mark` can mark it during GC without acquiring
+  the lock. There is no pure-Rust loader type in `librbs-core`
+  because the loader's behaviour is uniformly Ruby-coupled
+  (`Library`, `UnknownLibraryError`, the `gem_sig_path` /
+  `repository.lookup` resolution chain, and the `each_dir` block
+  protocol all require Ruby callbacks), so the thin
+  `(core_root, dirs)` data holder that would have lived there was
+  dropped in favour of holding the fields directly on the magnus
+  wrapper. The Ruby side reopens the class to add the kwargs `new`
+  / `add` / `load` dispatchers, the `add_collection` /
+  `resolve_dependencies` orchestration (Ruby's `Lockfile` /
+  `Collection::Sources::*` are deeply Ruby), the `gem_sig_path`
+  class method, and the high-level readers (`core_root` →
+  `Pathname`, `libs` → `Set[Library]`). `Library`,
+  `UnknownLibraryError`, and `DEFAULT_CORE_ROOT` are re-exposed on
+  the replacement via `const_set`. Three upstream-internal methods
+  are intentionally dropped: `has_library?` /
+  `resolve_dependencies` (folded into `each_dir` /
+  `add_library`'s callback chain) and `each_signature` (the only
+  external caller was `spec/compat/gems_spec.rb`, switched to
+  `each_dir`; reimplementing in Ruby would reintroduce
+  `Parser.parse_signature` Ruby AST instantiation). The numbers in
+  the tables above are within run-to-run jitter of the prior
+  revision — this is a responsibility-allocation change, not a perf
+  change. The naming convention that came out of it: `Wrapped*`
+  prefix is reserved for *internal* handles stored on
+  `@__librbs_*` ivars (`WrappedEnvironment`, `WrappedResolution`);
+  the public-facing Rust struct that backs
+  `Librbs::Native::EnvironmentLoader` carries no prefix.
 - Materializer optimisations layered on top of the original baseline
   (all reflected in the librbs numbers above):
   - `TypeName` / `Namespace` are flyweighted by interner Sym, so the same

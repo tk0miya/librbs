@@ -1,9 +1,9 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use magnus::{
-    Error, IntoValue, RArray, Ruby, Symbol, TryConvert, Value, function, prelude::*,
-    value::ReprValue,
+    DataTypeFunctions, Error, IntoValue, RArray, Ruby, Symbol, TryConvert, TypedData, Value,
+    function, gc, method, prelude::*, value::Opaque, value::ReprValue,
 };
 use rustc_hash::FxHashSet;
 
@@ -41,6 +41,79 @@ struct WrappedResolution(Arc<Resolution>);
 impl WrappedResolution {
     fn new(resolution: Resolution) -> Self {
         Self(Arc::new(resolution))
+    }
+}
+
+/// `RBS::EnvironmentLoader::Library` mirror. Lives on the magnus
+/// side because `Library` is conceptually Ruby-bound: instances are
+/// constructed via `Library.new(name:, version:)` and surfaced
+/// through `each_dir` and `UnknownLibraryError(lib:)`. The dedup
+/// semantics are the same `Set<Library>` field-equality upstream
+/// uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Library {
+    name: String,
+    version: Option<String>,
+}
+
+/// User-added sources of type information. Holds the two
+/// fields that grow via `loader.add(...)` calls: directories the
+/// user provided (`add(path: ...)`) and library entries
+/// (`add(library: ...)`). `core_root` (system-provided default)
+/// and `repository` (registry for resolving library names) sit
+/// outside this struct on the magnus wrapper — they're not
+/// "additions" the user accumulates the same way.
+///
+/// Lives behind a single `Mutex` so the two `Vec` fields can be
+/// mutated through `&self` while still satisfying magnus's
+/// `Send + Sync` requirement on the wrapper.
+struct Additions {
+    dirs: Vec<PathBuf>,
+    libs: Vec<Library>,
+}
+
+/// Magnus wrapper for the public `RBS::EnvironmentLoader` class.
+///
+/// Unlike `WrappedEnvironment` / `WrappedResolution` (which are
+/// hidden handles stashed on `RBS::Environment` ivars), this struct
+/// *is* the user-facing class: `RBS::EnvironmentLoader` is set as
+/// an alias for `Librbs::Native::EnvironmentLoader` by
+/// `lib/librbs/patches/environment_loader.rb`, so the absence of a
+/// `Wrapped*` prefix is intentional — `Wrapped*` is reserved for
+/// internal handles.
+///
+/// Fields are split by mutability and semantic role:
+///
+/// - `core_root` — system-provided default type-information
+///   directory. Immutable after construction; held outside the
+///   `Mutex` so reads don't pay a lock acquisition.
+/// - `additions` — user-added type-information sources (`dirs` +
+///   `libs`). Mutable through `add(path:)` / `add(library:)`, so
+///   it goes behind the `Mutex` to satisfy `Send + Sync`.
+/// - `repository` — `Opaque<Value>` reference to a Ruby
+///   `RBS::Repository` instance, used as a lookup registry for
+///   resolving library `(name, version)` pairs to directories.
+///   Held outside the `Mutex` because `Opaque<Value>` is already
+///   `Sync`, and so that `DataTypeFunctions::mark` can mark it
+///   without acquiring a lock during GC.
+///
+/// There is no pure-Rust loader type in `librbs-core` because the
+/// loader's behaviour is uniformly Ruby-coupled: `Library`,
+/// `UnknownLibraryError`, the `gem_sig_path` / `repository.lookup`
+/// resolution chain, and the `each_dir` block protocol all require
+/// Ruby callbacks. A pure `(core_root, dirs)` data holder would
+/// have no logic on top of `Vec::push`, so it was dropped.
+#[derive(TypedData)]
+#[magnus(class = "Librbs::Native::EnvironmentLoader", free_immediately, mark)]
+struct EnvironmentLoader {
+    core_root: Option<PathBuf>,
+    additions: Mutex<Additions>,
+    repository: Opaque<Value>,
+}
+
+impl DataTypeFunctions for EnvironmentLoader {
+    fn mark(&self, marker: &gc::Marker) {
+        marker.mark(self.repository);
     }
 }
 
@@ -246,122 +319,320 @@ fn materialize_all(env_ruby: Value) -> Result<Value, Error> {
     Ok(ruby.qnil().as_value())
 }
 
-/// `Librbs::Native.load_env(env, core_root, libs, dirs, repository)` —
-/// invoked from the patched `RBS::EnvironmentLoader#load`. The Ruby
-/// side hands over the loader's configuration; this function owns
-/// the rest of the `each_dir` orchestration that upstream's pure-Ruby
-/// `load` would run:
-///
-/// - `core_root`: `String` or `nil` (the core `.rbs` directory).
-/// - `libs`: `Array<RBS::EnvironmentLoader::Library>` in insertion
-///   order. Each lib is resolved by first calling back into Ruby for
-///   `RBS::EnvironmentLoader.gem_sig_path(name, version)` and, on
-///   `nil`, by calling `repository.lookup(name, version)`. Both
-///   callbacks stay on the Ruby side: upstream's `Gem::Specification`
-///   and `RBS::Repository::GemRBS` already memoize their per-gem
-///   walks, so a Rust reimplementation was measured to be a wash
-///   (single-load) or noise-level (multi-load) — see
-///   `benchmark/summary.md` for the data behind the decision. If
-///   neither callback yields a path, an
-///   `RBS::EnvironmentLoader::UnknownLibraryError` is raised carrying
-///   the original lib Value via the `lib:` kwarg.
-/// - `dirs`: user-supplied paths added via `loader.add(path: ...)`.
-///   These keep `skip_hidden = false` per upstream's
-///   `!source.is_a?(Pathname)` rule.
-/// - `repository`: the loader's `RBS::Repository` instance (upstream
-///   class — librbs does not replace it). `repository.lookup` is the
-///   only thing Rust calls on it; per-lib funcall overhead is sub-µs.
-///
-/// The resulting `(path, skip_hidden)` list is fed to
-/// `librbs_core::discovery::discover_rbs_files` and then through
-/// `librbs_core::Environment::from_paths` for the parallel read +
-/// parse + `add_source` pipeline.
-fn load_env(
-    env: Value,
-    core_root: Value,
-    libs: RArray,
-    dirs: RArray,
-    repository: Value,
-) -> Result<Value, Error> {
-    let ruby = Ruby::get().expect("Ruby thread");
-
-    let mut specs: Vec<librbs_core::discovery::DirSpec> = Vec::new();
-
-    // 1. core
-    if !core_root.is_nil() {
-        let path: String = TryConvert::try_convert(core_root)?;
-        specs.push(librbs_core::discovery::DirSpec {
-            path: PathBuf::from(path),
-            skip_hidden: true,
-        });
+impl EnvironmentLoader {
+    /// `Librbs::Native::EnvironmentLoader.new(core_root_str, repository)`
+    /// — invoked from `lib/librbs/patches/environment_loader.rb`'s
+    /// `new(core_root:, repository:)` wrapper after kwargs are
+    /// destructured into positional args. `core_root_str` is
+    /// `nil`-or-`String` (`Pathname#to_s` is already applied on the
+    /// Ruby side); `repository` is the live `RBS::Repository`
+    /// instance, held as `Opaque<Value>` so
+    /// `DataTypeFunctions::mark` can mark it against GC.
+    fn new(core_root: Option<String>, repository: Value) -> Self {
+        Self {
+            core_root: core_root.map(PathBuf::from),
+            additions: Mutex::new(Additions {
+                dirs: Vec::new(),
+                libs: Vec::new(),
+            }),
+            repository: Opaque::from(repository),
+        }
     }
 
-    // 2. libs — gem_sig_path callback into Ruby, fallback to
-    // `RBS::Repository#lookup` (also Ruby).
-    let env_loader_class: Value = ruby.eval("RBS::EnvironmentLoader")?;
-    let unknown_lib_class: Value = ruby.eval("RBS::EnvironmentLoader::UnknownLibraryError")?;
+    /// `loader.core_root` — returns `Pathname | nil`. The `Pathname`
+    /// is constructed via funcall because it's a Ruby class; the
+    /// underlying storage is `Option<PathBuf>` held directly on the
+    /// wrapper (immutable after construction, no lock needed).
+    fn core_root(&self) -> Result<Value, Error> {
+        let ruby = Ruby::get().expect("Ruby thread");
+        match &self.core_root {
+            Some(path) => {
+                let pathname_class: Value = ruby.eval("Pathname")?;
+                let v: Value =
+                    pathname_class.funcall("new", (path.to_string_lossy().into_owned(),))?;
+                Ok(v)
+            }
+            None => Ok(ruby.qnil().as_value()),
+        }
+    }
 
-    for lib in libs.into_iter() {
-        let name: String = lib.funcall("name", ())?;
-        let version_v: Value = lib.funcall("version", ())?;
-        let version: Option<String> = if version_v.is_nil() {
-            None
+    /// `loader.libs` — returns
+    /// `Set[RBS::EnvironmentLoader::Library]` matching upstream's
+    /// `attr_reader :libs`. The `Library` instances and the `Set`
+    /// are constructed via funcall (they're Ruby types); the
+    /// underlying storage is `Vec<Library>` on [`Additions`] with
+    /// field-equality dedup.
+    fn libs(&self) -> Result<Value, Error> {
+        let ruby = Ruby::get().expect("Ruby thread");
+        let library_class: Value = ruby.eval("RBS::EnvironmentLoader::Library")?;
+        let set_class: Value = ruby.eval("Set")?;
+        let set: Value = set_class.funcall("new", ())?;
+        let additions = self
+            .additions
+            .lock()
+            .expect("EnvironmentLoader additions mutex poisoned");
+        for lib in &additions.libs {
+            let lib_value: Value = library_class.funcall(
+                "new",
+                (magnus::kwargs!(
+                    "name" => lib.name.clone(),
+                    "version" => lib.version.clone()
+                ),),
+            )?;
+            let _: Value = set.funcall("<<", (lib_value,))?;
+        }
+        Ok(set)
+    }
+
+    /// Reader for the held `RBS::Repository` instance. The
+    /// `Opaque<Value>` round-trip needs a Ruby thread (`get_inner`).
+    fn repository(&self) -> Value {
+        let ruby = Ruby::get().expect("Ruby thread");
+        ruby.get_inner(self.repository)
+    }
+
+    fn add_path(&self, path: String) {
+        let mut additions = self
+            .additions
+            .lock()
+            .expect("EnvironmentLoader additions mutex poisoned");
+        additions.dirs.push(PathBuf::from(path));
+    }
+
+    /// Add a library entry. Returns the `inserted_new` flag so the
+    /// Ruby side knows whether to recurse into
+    /// `Collection::Sources::*.dependencies_of`. Dedup mirrors
+    /// upstream's `Set#add?`: same `(name, version)` already
+    /// present means no recursion.
+    fn add_library(&self, name: String, version: Option<String>) -> Result<bool, Error> {
+        let mut additions = self
+            .additions
+            .lock()
+            .expect("EnvironmentLoader additions mutex poisoned");
+        let new_entry = Library { name, version };
+        if additions.libs.iter().any(|l| l == &new_entry) {
+            Ok(false)
         } else {
-            Some(TryConvert::try_convert(version_v)?)
-        };
+            additions.libs.push(new_entry);
+            Ok(true)
+        }
+    }
 
+    /// Resolve a `Library` to its `.rbs` directory via the same
+    /// chain upstream `EnvironmentLoader#each_dir` uses:
+    /// `gem_sig_path(name, version)` first, then
+    /// `repository.lookup(name, version)`. Returns `Ok(Some(path))`
+    /// on success, `Ok(None)` if neither callback yields a path
+    /// (caller raises `UnknownLibraryError` with the lib Value).
+    fn resolve_library_dir(
+        _ruby: &Ruby,
+        env_loader_class: Value,
+        repository: Value,
+        lib: &Library,
+    ) -> Result<Option<Value>, Error> {
         let gem_result: Value =
-            env_loader_class.funcall("gem_sig_path", (name.clone(), version.clone()))?;
+            env_loader_class.funcall("gem_sig_path", (lib.name.clone(), lib.version.clone()))?;
         if !gem_result.is_nil() {
             let pair = RArray::try_convert(gem_result)?;
-            let path_v: Value = pair.entry(1)?;
-            let path: String = path_v.funcall("to_s", ())?;
-            specs.push(librbs_core::discovery::DirSpec {
-                path: PathBuf::from(path),
-                skip_hidden: true,
-            });
-            continue;
+            return Ok(Some(pair.entry::<Value>(1)?));
         }
-
-        let repo_result: Value = repository.funcall("lookup", (name.clone(), version.clone()))?;
+        let repo_result: Value =
+            repository.funcall("lookup", (lib.name.clone(), lib.version.clone()))?;
         if !repo_result.is_nil() {
-            let path: String = repo_result.funcall("to_s", ())?;
-            specs.push(librbs_core::discovery::DirSpec {
-                path: PathBuf::from(path),
-                skip_hidden: true,
-            });
-            continue;
+            return Ok(Some(repo_result));
+        }
+        Ok(None)
+    }
+
+    /// `loader.each_dir { |source, dir| ... }` — yields per
+    /// upstream's contract: `:core` symbol for the core directory,
+    /// `RBS::EnvironmentLoader::Library` for gem/repository-resolved
+    /// libraries, and the user-supplied `Pathname` for paths added
+    /// via `add(path: ...)`. Iterates the three sources in their
+    /// upstream order (core → libs → user dirs) as three sequential
+    /// phases — the dedup-on-first-occurrence behaviour of
+    /// `librbs_core::discovery::discover_rbs_files` depends on this
+    /// order.
+    fn each_dir(&self) -> Result<Value, Error> {
+        let ruby = Ruby::get().expect("Ruby thread");
+        if !ruby.block_given() {
+            return Ok(ruby.qnil().as_value());
         }
 
-        // Unknown library — raise the upstream-compatible class with
-        // the lib Value attached, so consumers that `rescue
-        // RBS::EnvironmentLoader::UnknownLibraryError => e; e.library`
-        // keep working.
-        let err_inst: magnus::Exception = env_loader_class
-            .funcall::<_, _, Value>("const_get", (ruby.to_symbol("UnknownLibraryError"),))
-            .and_then(|_| {
-                unknown_lib_class
-                    .funcall::<_, _, magnus::Exception>("new", (magnus::kwargs!("lib" => lib),))
-            })?;
-        return Err(Error::from(err_inst));
+        let env_loader_class: Value = ruby.eval("RBS::EnvironmentLoader")?;
+        let library_class: Value = ruby.eval("RBS::EnvironmentLoader::Library")?;
+        let unknown_library_error_class: Value =
+            ruby.eval("RBS::EnvironmentLoader::UnknownLibraryError")?;
+        let pathname_class: Value = ruby.eval("Pathname")?;
+        let core_sym: Value = ruby.to_symbol("core").as_value();
+
+        // Snapshot `additions` under the lock so we can drop the
+        // mutex before yielding back to Ruby (which could otherwise
+        // re-enter our methods). `core_root` lives outside the
+        // mutex, so it's read directly off `self`.
+        let (dirs, libs) = {
+            let additions = self
+                .additions
+                .lock()
+                .expect("EnvironmentLoader additions mutex poisoned");
+            (additions.dirs.clone(), additions.libs.clone())
+        };
+        let repository: Value = ruby.get_inner(self.repository);
+
+        // 1. core
+        if let Some(path) = &self.core_root {
+            let pathname: Value =
+                pathname_class.funcall("new", (path.to_string_lossy().into_owned(),))?;
+            let _: Value = ruby.yield_values((core_sym, pathname))?;
+        }
+
+        // 2. libs (between core and user dirs, matching upstream)
+        Self::yield_libs(
+            &ruby,
+            env_loader_class,
+            library_class,
+            unknown_library_error_class,
+            repository,
+            &libs,
+        )?;
+
+        // 3. user dirs
+        for path in &dirs {
+            let pathname: Value =
+                pathname_class.funcall("new", (path.to_string_lossy().into_owned(),))?;
+            let _: Value = ruby.yield_values((pathname, pathname))?;
+        }
+
+        Ok(ruby.qnil().as_value())
     }
 
-    // 3. user-added dirs
-    for d in dirs.into_iter() {
-        let path: String = d.funcall("to_s", ())?;
-        specs.push(librbs_core::discovery::DirSpec {
-            path: PathBuf::from(path),
-            skip_hidden: false,
-        });
+    fn yield_libs(
+        ruby: &Ruby,
+        env_loader_class: Value,
+        library_class: Value,
+        unknown_library_error_class: Value,
+        repository: Value,
+        libs: &[Library],
+    ) -> Result<(), Error> {
+        for lib in libs {
+            let lib_value: Value = library_class.funcall(
+                "new",
+                (magnus::kwargs!(
+                    "name" => lib.name.clone(),
+                    "version" => lib.version.clone()
+                ),),
+            )?;
+
+            let path = match Self::resolve_library_dir(ruby, env_loader_class, repository, lib)? {
+                Some(p) => p,
+                None => {
+                    let err: magnus::Exception = unknown_library_error_class
+                        .funcall("new", (magnus::kwargs!("lib" => lib_value),))?;
+                    return Err(Error::from(err));
+                }
+            };
+
+            let _: Value = ruby.yield_values((lib_value, path))?;
+        }
+        Ok(())
     }
 
-    let files = librbs_core::discovery::discover_rbs_files(specs).map_err(rb_runtime_err)?;
-    let core_env = librbs_core::Environment::from_paths(files).map_err(rb_runtime_err)?;
+    /// `loader.load_env(env)` — the Rust action that the Ruby
+    /// `load(env:)` wrapper dispatches to. Walks the three sources
+    /// in upstream's order (core → libs → user dirs), feeds the
+    /// resulting `DirSpec` list to the parallel
+    /// `discovery → parse → entries` pipeline, and attaches the
+    /// resulting `Arc<Environment>` to `env` via the
+    /// `@__librbs_handle` ivar.
+    fn load_env(&self, env: Value) -> Result<Value, Error> {
+        let ruby = Ruby::get().expect("Ruby thread");
 
-    let wrapped: Value = WrappedEnvironment(Arc::new(core_env)).into_value_with(&ruby);
-    ivar_set(env, "@__librbs_handle", wrapped)?;
+        let (dirs, libs) = {
+            let additions = self
+                .additions
+                .lock()
+                .expect("EnvironmentLoader additions mutex poisoned");
+            (additions.dirs.clone(), additions.libs.clone())
+        };
 
-    Ok(env)
+        let env_loader_class: Value = ruby.eval("RBS::EnvironmentLoader")?;
+        let library_class: Value = ruby.eval("RBS::EnvironmentLoader::Library")?;
+        let unknown_library_error_class: Value =
+            ruby.eval("RBS::EnvironmentLoader::UnknownLibraryError")?;
+        let repository: Value = ruby.get_inner(self.repository);
+
+        let mut specs: Vec<librbs_core::discovery::DirSpec> = Vec::new();
+
+        // 1. core
+        if let Some(path) = &self.core_root {
+            specs.push(librbs_core::discovery::DirSpec {
+                path: path.clone(),
+                skip_hidden: true,
+            });
+        }
+
+        // 2. libs
+        Self::push_lib_specs(
+            &ruby,
+            env_loader_class,
+            library_class,
+            unknown_library_error_class,
+            repository,
+            &libs,
+            &mut specs,
+        )?;
+
+        // 3. user dirs
+        for path in &dirs {
+            specs.push(librbs_core::discovery::DirSpec {
+                path: path.clone(),
+                skip_hidden: false,
+            });
+        }
+
+        let files = librbs_core::discovery::discover_rbs_files(specs).map_err(rb_runtime_err)?;
+        let core_env = librbs_core::Environment::from_paths(files).map_err(rb_runtime_err)?;
+
+        let wrapped: Value = WrappedEnvironment(Arc::new(core_env)).into_value_with(&ruby);
+        ivar_set(env, "@__librbs_handle", wrapped)?;
+
+        Ok(env)
+    }
+
+    fn push_lib_specs(
+        ruby: &Ruby,
+        env_loader_class: Value,
+        library_class: Value,
+        unknown_library_error_class: Value,
+        repository: Value,
+        libs: &[Library],
+        specs: &mut Vec<librbs_core::discovery::DirSpec>,
+    ) -> Result<(), Error> {
+        for lib in libs {
+            match Self::resolve_library_dir(ruby, env_loader_class, repository, lib)? {
+                Some(path_v) => {
+                    let path: String = path_v.funcall("to_s", ())?;
+                    specs.push(librbs_core::discovery::DirSpec {
+                        path: PathBuf::from(path),
+                        skip_hidden: true,
+                    });
+                }
+                None => {
+                    let lib_value: Value = library_class.funcall(
+                        "new",
+                        (magnus::kwargs!(
+                            "name" => lib.name.clone(),
+                            "version" => lib.version.clone()
+                        ),),
+                    )?;
+                    let err: magnus::Exception = unknown_library_error_class
+                        .funcall("new", (magnus::kwargs!("lib" => lib_value),))?;
+                    return Err(Error::from(err));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[magnus::init]
@@ -379,7 +650,21 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let wrapped_res_class = module.define_class("WrappedResolution", object)?;
     wrapped_res_class.undef_default_alloc_func();
 
-    module.define_singleton_method("load_env", function!(load_env, 5))?;
+    // `Librbs::Native::EnvironmentLoader` is the public class that
+    // `lib/librbs/patches/environment_loader.rb` aliases to
+    // `RBS::EnvironmentLoader`. The default alloc fn stays (magnus
+    // wires it through `TypedData`) because the Ruby wrapper does
+    // `__native_new__(core_root_str, repository)` to construct.
+    let loader_class = module.define_class("EnvironmentLoader", object)?;
+    loader_class.define_singleton_method("new", function!(EnvironmentLoader::new, 2))?;
+    loader_class.define_method("core_root", method!(EnvironmentLoader::core_root, 0))?;
+    loader_class.define_method("libs", method!(EnvironmentLoader::libs, 0))?;
+    loader_class.define_method("repository", method!(EnvironmentLoader::repository, 0))?;
+    loader_class.define_method("add_path", method!(EnvironmentLoader::add_path, 1))?;
+    loader_class.define_method("add_library", method!(EnvironmentLoader::add_library, 2))?;
+    loader_class.define_method("each_dir", method!(EnvironmentLoader::each_dir, 0))?;
+    loader_class.define_method("load_env", method!(EnvironmentLoader::load_env, 1))?;
+
     module.define_singleton_method("resolve_type_names", function!(resolve_type_names, 2))?;
     module.define_singleton_method("materialize_all", function!(materialize_all, 1))?;
 
