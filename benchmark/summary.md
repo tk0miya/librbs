@@ -1,13 +1,15 @@
 # Benchmark results
 
-Date: 2026-05-18
+Date: 2026-05-20
 Environment: macOS 15 / Ruby 3.3.11, 3.4.9, 4.0.4 (rbenv-switched) / Darwin 24.6.0 (arm64-darwin24, M4 Mac)
 
-Wall time, minimum of 3 runs per cell. Each (impl, size, ruby)
-triple runs in its own subprocess (`require "librbs"` patches
-`RBS::Environment` globally — see `benchmark/helpers.rb`). Ruby was
-switched via `rbenv`, with `bundle install` + `rake compile` rerun per
-version so each row uses a natively-compiled librbs against that Ruby.
+Wall time, minimum across runs per cell (each subprocess takes its own
+min-of-3 internally, then min-of-N outer invocations is reported here).
+Each (impl, size, ruby) triple runs in its own subprocess (`require
+"librbs"` patches `RBS::Environment` globally — see
+`benchmark/helpers.rb`). Ruby was switched via `rbenv`, with `bundle
+install` + `rake compile` rerun per version so each row uses a
+natively-compiled librbs against that Ruby.
 
 Sizes:
 
@@ -29,9 +31,9 @@ the on-run are within run-to-run jitter).
 
 | ruby   | small (normal / fast) | large (normal / fast)  |
 |--------|-----------------------|------------------------|
-| 3.3.11 | 2.37x / **4.27x**     | 5.59x / **10.76x**     |
-| 3.4.9  | 1.74x / **2.73x**     | 1.40x / **2.45x**      |
-| 4.0.4  | 1.92x / **2.70x**     | 1.57x / **2.62x**      |
+| 3.3.11 | 1.67x / **4.59x**     | 6.26x / **11.59x**     |
+| 3.4.9  | 1.75x / **2.40x**     | 1.36x / **2.30x**      |
+| 4.0.4  | 1.75x / **2.35x**     | 1.58x / **3.11x**      |
 
 Bold cells are the headline speedup for that row.
 
@@ -43,24 +45,24 @@ fully realized Ruby state on both sides.
 
 | ruby   | size  | pure RBS  | librbs (normal) | speedup_n | librbs (fast alloc) | speedup_f |
 |--------|-------|-----------|-----------------|-----------|---------------------|-----------|
-| 3.3.11 | small |  102.4 ms |         43.3 ms |     2.37x |             22.7 ms |     4.27x |
-| 3.3.11 | large | 2337.3 ms |        418.0 ms |     5.59x |            214.3 ms |    10.76x |
-| 3.4.9  | small |   61.9 ms |         35.7 ms |     1.74x |             22.3 ms |     2.73x |
-| 3.4.9  | large |  469.7 ms |        336.5 ms |     1.40x |            194.2 ms |     2.45x |
-| 4.0.4  | small |   55.5 ms |         28.9 ms |     1.92x |             20.0 ms |     2.70x |
-| 4.0.4  | large |  399.4 ms |        254.8 ms |     1.57x |            153.8 ms |     2.62x |
+| 3.3.11 | small |   92.2 ms |         55.2 ms |     1.67x |             20.1 ms |     4.59x |
+| 3.3.11 | large | 2462.4 ms |        393.6 ms |     6.26x |            212.5 ms |    11.59x |
+| 3.4.9  | small |   58.9 ms |         33.6 ms |     1.75x |             24.5 ms |     2.40x |
+| 3.4.9  | large |  452.4 ms |        333.6 ms |     1.36x |            197.1 ms |     2.30x |
+| 4.0.4  | small |   52.8 ms |         30.1 ms |     1.75x |             22.5 ms |     2.35x |
+| 4.0.4  | large |  411.7 ms |        260.5 ms |     1.58x |            132.3 ms |     3.11x |
 
 ## Cross-Ruby observations
 
 - Pure RBS gets dramatically faster on 3.4+. `large` pure-RBS time
-  drops from ~2100 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on
+  drops from ~2460 ms on 3.3.11 to ~450 ms on 3.4.9 and ~410 ms on
   4.0.4 — Ruby 3.4 makes Prism the default parser, and the same
   effect compresses the librbs speedup ratio without librbs itself
-  slowing down (fast-alloc large drops from 186 ms on 3.3.11 to
-  ~135–200 ms across the 3.4+ Rubies).
+  slowing down (fast-alloc large stays in the 130–215 ms band across
+  every Ruby).
 - **Fast alloc** retains a clear margin on every cell: small
-  2.75x–3.53x, large 2.33x–11.13x. The 3.3.11 large 11.13x is the
-  high watermark; on 3.4+ it compresses to ~2.3–3.0x because pure
+  2.35x–4.59x, large 2.30x–11.59x. The 3.3.11 large 11.59x is the
+  high watermark; on 3.4+ it compresses to ~2.3–3.1x because pure
   RBS shrank, not because librbs regressed.
 - The resolve phase is essentially free in librbs across every Ruby.
   The previous two-script bench split `load_only` vs `load_and_resolve`
@@ -157,19 +159,25 @@ fully realized Ruby state on both sides.
   `RBS::EnvironmentLoader#load` was replaced by a full class swap:
   `Librbs::Native::EnvironmentLoader` (a magnus-wrapped Rust struct)
   is now `RBS::EnvironmentLoader` directly, no Ruby facade in the
-  middle. All loader state (`core_root`, `dirs`, `libs`) lives in
-  the wrapper's `Mutex<LoaderState>`; the wrapper additionally
-  holds the `RBS::Repository` reference as `Opaque<Value>` with
-  `DataTypeFunctions::mark` for GC. There is no pure-Rust loader
-  type in `librbs-core` because the loader's behaviour is uniformly
-  Ruby-coupled (`Library`, `UnknownLibraryError`, the
-  `gem_sig_path` / `repository.lookup` resolution chain, and the
-  `each_dir` block protocol all require Ruby callbacks), so the
-  thin `(core_root, dirs)` data holder that would have lived there
-  was dropped in favour of holding the fields directly on the
-  magnus wrapper. The Ruby side reopens the class to add the
-  kwargs `new` / `add` / `load` dispatchers, the `add_collection`
-  / `resolve_dependencies` orchestration (Ruby's `Lockfile` /
+  middle. The wrapper splits its fields by mutability / semantic
+  role: user-added sources (`dirs`, `libs`) live behind a single
+  `Mutex<Additions>` (mutable through `add(path:)` / `add(library:)`,
+  guarded so the two `Vec`s can be mutated through `&self` while
+  still satisfying magnus's `Send + Sync` requirement); `core_root`
+  is immutable after construction and sits directly on the wrapper
+  (no lock acquisition on read); `repository` is held as
+  `Opaque<Value>` outside the mutex so that
+  `DataTypeFunctions::mark` can mark it during GC without acquiring
+  the lock. There is no pure-Rust loader type in `librbs-core`
+  because the loader's behaviour is uniformly Ruby-coupled
+  (`Library`, `UnknownLibraryError`, the `gem_sig_path` /
+  `repository.lookup` resolution chain, and the `each_dir` block
+  protocol all require Ruby callbacks), so the thin
+  `(core_root, dirs)` data holder that would have lived there was
+  dropped in favour of holding the fields directly on the magnus
+  wrapper. The Ruby side reopens the class to add the kwargs `new`
+  / `add` / `load` dispatchers, the `add_collection` /
+  `resolve_dependencies` orchestration (Ruby's `Lockfile` /
   `Collection::Sources::*` are deeply Ruby), the `gem_sig_path`
   class method, and the high-level readers (`core_root` →
   `Pathname`, `libs` → `Set[Library]`). `Library`,
