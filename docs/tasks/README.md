@@ -17,7 +17,6 @@ through a Rust-backed implementation. User code is not modified.
 |---|---|
 | [../design.md](../design.md) | Overall design, architectural decisions, and rationale |
 | [../reference.md](../reference.md) | Locations in `vendor/rbs` to reference |
-| [followups.md](followups.md) | Items deferred from a prior milestone, with the trigger that should pull them in |
 
 ## Non-goals
 
@@ -28,8 +27,10 @@ them.
   inheritance lookup, a single-file change can invalidate resolution for the
   entire environment. Persistent caching cannot be operated soundly. Only
   in-process, in-memory reuse is permitted.
-- **In-process incremental updates** (`unload` / `add_source` after a
-  resolved env): out of scope.
+- **In-process incremental updates** (`unload` / `add_source`): out of
+  scope. librbs targets the load → `resolve_type_names` (first name
+  resolution) → read flow only; mutating the env before or after
+  resolution is not supported.
 - **Windows support**: Linux / macOS only for now. Do not introduce
   Windows-specific branches.
 - **Public `Librbs::*` API**: Users must not interact with the `Librbs`
