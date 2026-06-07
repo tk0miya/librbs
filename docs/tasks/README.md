@@ -17,7 +17,6 @@ through a Rust-backed implementation. User code is not modified.
 |---|---|
 | [../design.md](../design.md) | Overall design, architectural decisions, and rationale |
 | [../reference.md](../reference.md) | Locations in `vendor/rbs` to reference |
-| [M5-incremental.md](M5-incremental.md) | In-process incremental updates (pending) |
 | [followups.md](followups.md) | Items deferred from a prior milestone, with the trigger that should pull them in |
 
 ## Non-goals
@@ -29,6 +28,8 @@ them.
   inheritance lookup, a single-file change can invalidate resolution for the
   entire environment. Persistent caching cannot be operated soundly. Only
   in-process, in-memory reuse is permitted.
+- **In-process incremental updates** (`unload` / `add_source` after a
+  resolved env): out of scope.
 - **Windows support**: Linux / macOS only for now. Do not introduce
   Windows-specific branches.
 - **Public `Librbs::*` API**: Users must not interact with the `Librbs`
@@ -49,3 +50,4 @@ them.
    Numbers from `from_loader` alone are not the basis for decisions.
 4. **Compatibility is verified mechanically via canonical-dump diff**. Any
    deviation should fail tests.
+
