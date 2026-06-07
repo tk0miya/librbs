@@ -32,12 +32,36 @@ module Librbs
       # materialisation. `declarations` is `attr_reader`-less upstream
       # (defined as `sources.flat_map(&:declarations)`); we trigger
       # materialisation and let the upstream method recompute.
+      #
+      # `inspect` is included because upstream reads the ivar sizes
+      # directly via `instance_variable_get` (environment.rb:994), which
+      # bypasses the patched accessors; without the trigger `pp env`
+      # before any other access prints `(0 items)` for every category.
       %i[class_decls interface_decls type_alias_decls
          constant_decls class_alias_decls global_decls
-         sources declarations].each do |m|
+         sources declarations inspect].each do |m|
         define_method(m) do
           ensure_materialized
           super()
+        end
+      end
+
+      # `dup` / `clone` copy the bare ivars at the VM level *before*
+      # `initialize_copy` runs, so a copy taken before materialization
+      # would carry empty decl Hashes plus a shared `@__librbs_handle`.
+      # Materialize the source first (so upstream's
+      # `other.class_decls.dup` reads populated data), then sever the
+      # Rust linkage on the copy: the freshly dup'd Ruby ivars are the
+      # single source of truth, and `ensure_materialized` on the copy
+      # becomes a no-op. The explicit `ensure_materialized` keeps this
+      # correct even if a future upstream `initialize_copy` switches to
+      # reading `other`'s ivars directly instead of via the accessors.
+      def initialize_copy(other)
+        other.send(:ensure_materialized)
+        super
+        if instance_variable_defined?(:@__librbs_handle)
+          remove_instance_variable(:@__librbs_handle)
+          @__librbs_materialized = true
         end
       end
 
