@@ -243,10 +243,7 @@ impl TypeNameResolver {
 
         // Apply alias normalization at the head.
         if let Some((rhs, ctx)) = self.aliases.get(&acc).cloned() {
-            match self.normalize_namespace(acc, rhs, &ctx, visited, interner) {
-                Some(v) => acc = v,
-                None => return None,
-            }
+            acc = self.normalize_namespace(acc, rhs, &ctx, visited, interner)?;
         }
 
         // Walk the tail, resolving each segment against `acc.to_namespace`.
@@ -264,10 +261,7 @@ impl TypeNameResolver {
             if self.has_type_name(candidate) {
                 acc = candidate;
             } else if let Some((rhs, ctx)) = self.aliases.get(&candidate).cloned() {
-                match self.normalize_namespace(candidate, rhs, &ctx, visited, interner) {
-                    Some(v) => acc = v,
-                    None => return None,
-                }
+                acc = self.normalize_namespace(candidate, rhs, &ctx, visited, interner)?;
             } else {
                 return None;
             }
