@@ -40,6 +40,22 @@ installed gem is visible. To swap in a different OSS project's
 lockfile, replace `benchmark/fixtures/conference_app.rbs_collection.{yaml,lock.yaml}`
 (and `Gemfile{,.lock}` if the gem set differs) and re-run both steps.
 
+### App-side sigs (`conference_app_bench.rb` only)
+
+`conference_app_bench.rb` measures the same pipeline but also loads
+conference-app's own `sig/` directory (161 files, handwritten +
+`rbs_rails`-generated). Populate the snapshot once:
+
+```sh
+git clone --depth 1 https://github.com/kaigionrails/conference-app.git \
+  /tmp/conference-app
+cp -r /tmp/conference-app/sig benchmark/fixtures/conference_app_sig
+```
+
+`benchmark/fixtures/conference_app_sig/` is gitignored (it is a
+snapshot of an external repo). `benchmark.rb` — the collection-only
+bench — does not need this step.
+
 [ca]: https://github.com/kaigionrails/conference-app/blob/main/rbs_collection.lock.yaml
 [grc]: https://github.com/ruby/gem_rbs_collection
 
@@ -55,6 +71,15 @@ Ruby state on both sides.
 
 ```sh
 bundle exec ruby benchmark/benchmark.rb
+```
+
+`benchmark/conference_app_bench.rb` runs the same pipeline against the
+same collection **plus** conference-app's own `sig/` snapshot (see
+"App-side sigs" above) — the workload documented in the top-level
+README's Performance section:
+
+```sh
+bundle exec ruby benchmark/conference_app_bench.rb
 ```
 
 The pure-RBS and librbs cases run in **separate Ruby subprocesses** —

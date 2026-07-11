@@ -3,3 +3,7 @@
 
 # Local bundler config from `bundle install` — regeneratable, not tracked.
 .bundle/
+
+# Populated by the conference-app setup step in benchmark/README.md —
+# not tracked (a snapshot of an external repo).
+conference_app_sig/
