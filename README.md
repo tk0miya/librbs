@@ -24,6 +24,22 @@ gem install UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
 
 TODO: Write usage instructions here
 
+## Benchmark
+
+librbs speeds up RBS type loading — signature loading with name
+resolution (`resolve`), plus materialization on the librbs side.
+Measured with the real `rbs list` command on
+[kaigionrails/conference-app][ca] (its own `sig/` plus a 92-gem
+collection), Ruby 4.0.4 / rbs 4.0.3, conference-app `899398f`:
+
+| load + resolve (+ materialize) | pure RBS | librbs | speedup |
+|--------------------------------|----------|----------|---------|
+| conference-app                 | 538.8 ms | 249.3 ms | **2.16x** |
+
+See [`benchmark/`](benchmark/) for the methodology and full breakdown.
+
+[ca]: https://github.com/kaigionrails/conference-app
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
