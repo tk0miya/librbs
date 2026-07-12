@@ -1,5 +1,5 @@
-# Populated by `rbs collection install` — regeneratable, not tracked.
-.gem_rbs_collection/
-
-# Local bundler config from `bundle install` — regeneratable, not tracked.
-.bundle/
+# The benchmark workload (kaigionrails/conference-app) is cloned here by
+# the setup steps in ../README.md, never vendored — this repo keeps no
+# other project's sources. The clone (its sig/, gem collection cache,
+# bundler config, and gemfiles) is entirely untracked.
+conference-app/

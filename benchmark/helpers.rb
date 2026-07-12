@@ -20,16 +20,13 @@ require "rbconfig"
 module BenchHelpers
   ROOT = File.expand_path("..", __dir__)
 
-  # The bench workload loads core + an `rbs_collection.lock.yaml` vendored
-  # from a real-world OSS project (kaigionrails/conference-app). Before
-  # running, populate both the collection cache and the gem path (some
-  # sigs are `type: rubygems` and ship inside the gem itself):
-  #
-  #     cd benchmark/fixtures && \
-  #       BUNDLE_GEMFILE="$PWD/Gemfile" bundle install && \
-  #       bundle exec rbs collection install \
-  #         --collection conference_app.rbs_collection.yaml --frozen
-  COLLECTION_LOCKFILE = "fixtures/conference_app.rbs_collection.lock.yaml"
+  # The bench workload loads core + the `rbs_collection.lock.yaml` of a
+  # real-world OSS project (kaigionrails/conference-app). The project is
+  # cloned into `fixtures/conference-app/` (never vendored — see
+  # `../README.md` for the pinned clone + collection-install steps).
+  # That one-shot populates both the collection cache and the gem path
+  # (some sigs are `type: rubygems` and ship inside the gem itself).
+  COLLECTION_LOCKFILE = "fixtures/conference-app/rbs_collection.lock.yaml"
 
   IMPLS = %i[pure_rbs librbs].freeze
 
@@ -66,10 +63,9 @@ module BenchHelpers
       require "yaml"
       _lock_path = Pathname(#{lock_abs.inspect})
       unless File.directory?(#{cache_dir.inspect})
-        abort "[bench] collection cache missing at #{cache_dir} -- run: " \\
-              "cd benchmark/fixtures && bundle exec rbs " \\
-              "--collection conference_app.rbs_collection.yaml " \\
-              "collection install --frozen"
+        abort "[bench] collection cache missing at #{cache_dir} -- run the " \\
+              "conference-app clone + `rbs collection install` steps in " \\
+              "benchmark/README.md"
       end
       _lockfile = RBS::Collection::Config::Lockfile.from_lockfile(
         lockfile_path: _lock_path,
