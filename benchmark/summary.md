@@ -250,3 +250,33 @@ fully realized Ruby state on both sides.
     above. The single `LIBRBS_FAST_ALLOC` env var continues to gate
     every call site so downstream users have one knob to flip if
     upstream RBS ever changes an `initialize` we've inlined.
+
+## `rbs list` command comparison (2026-07-12)
+
+Environment: macOS 15 / Ruby 4.0.4, rbs 4.0.3 (rbenv-switched) /
+Darwin 24.6.0 (arm64-darwin24, M4 Mac) / conference-app `899398f`. Wall
+time, min-of-25 via `benchmark/list_benchmark.sh` (`list_driver.rb`
+times each command end-to-end: VM boot + `require` + work).
+
+Unlike the in-process `benchmark.rb` tables above, this times the real
+`rbs -Isig list` command on the full [kaigionrails/conference-app][ca]
+project (cloned, never vendored — see `benchmark/README.md`; the clone
+tracks the default branch, so each result records the commit it was
+measured at, here `899398f`): its own 161 `.rbs` files via `-I`, plus
+the 92-gem collection auto-discovered from `rbs_collection.yaml`.
+`run_list` does
+`from_loader` → `resolve_type_names` → iterate decls (which triggers
+librbs's `materialize_all`) — i.e. load + resolve (+ materialize), no
+type check / validate. Both impls emit an identical 4236-entity list.
+
+| stage                              | pure RBS     | librbs       | speedup |
+|------------------------------------|--------------|--------------|---------|
+| `rbs -Isig list` (end-to-end)      | 791.3 ms     | 504.7 ms     | 1.57x   |
+| startup baseline (`rbs version`)   | 252.5 ms     | 255.4 ms     | —       |
+| load + resolve (+ materialize)     | 538.8 ms     | 249.3 ms     | 2.16x   |
+
+The startup baseline (VM boot + `require "rbs"`, no env work) is nearly
+identical for both — librbs's native extension adds ~3 ms — so
+subtracting it isolates the load pipeline: **2.16× faster**.
+
+[ca]: https://github.com/kaigionrails/conference-app
