@@ -1,35 +1,73 @@
-# Librbs
+# librbs — an experimental, Rust-backed accelerator for the RBS loader
 
-TODO: Delete this and the text below, and describe your gem
+`require "librbs"` and RBS type loading gets faster — nothing else
+changes. librbs monkey-patches `RBS::EnvironmentLoader` and
+`RBS::Environment` with a Rust implementation of the loader hot path:
+signature loading (`from_loader`), name resolution
+(`resolve_type_names`), and materialization. It is a drop-in accelerator
+for RBS- and Steep-based tooling.
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/librbs`. To experiment with that code, run `bin/console` for an interactive prompt.
+> **Experimental.** librbs replaces parts of RBS globally at `require`
+> time and is not published to RubyGems. Use it from Git, pinned to a
+> commit you have tried.
+
+## Benchmark
+
+Measured with the real `rbs list` command on
+[kaigionrails/conference-app][ca] (its own `sig/` plus a 92-gem
+collection), Ruby 4.0.4 / rbs 4.0.3, conference-app `899398f`:
+
+| load + resolve (+ materialize) | pure RBS | librbs   | speedup   |
+|--------------------------------|----------|----------|-----------|
+| conference-app                 | 538.8 ms | 249.3 ms | **2.16x** |
+
+`rbs list` runs exactly the pipeline being measured — load + resolve
+(+ materialize on the librbs side), and no type check or validate. See
+[`benchmark/`](benchmark/) for the methodology and full breakdown.
 
 ## Installation
 
-TODO: Replace `UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG` with your gem name right after releasing it to RubyGems.org. Please do not do it earlier due to security reasons. Alternatively, replace this section with instructions to install your gem from git if you don't plan to release to RubyGems.org.
+Not on RubyGems — install from Git. librbs ships a Rust extension, so
+building it needs a Rust toolchain (`cargo`).
 
-Install the gem and add to the application's Gemfile by executing:
-
-```bash
-bundle add UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
+```ruby
+# Gemfile
+gem "librbs", git: "https://github.com/tk0miya/librbs.git"
 ```
 
-If bundler is not being used to manage dependencies, install the gem by executing:
-
-```bash
-gem install UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
-```
+Requires Ruby >= 3.3 and `rbs ~> 4.0`.
 
 ## Usage
 
-TODO: Write usage instructions here
+Require librbs once, early — before any RBS environment is built. It
+patches RBS in place, so the rest of your process (including any tool
+that then loads RBS) uses the accelerated path automatically:
+
+```ruby
+require "librbs"   # patches RBS globally; also requires "rbs"
+```
+
+For a CLI you don't control, such as `rbs` or `steep`, preload it:
+
+```sh
+ruby -rlibrbs -S rbs list       # or: RUBYOPT="-rlibrbs" steep check
+```
+
+If the native extension fails to load, librbs warns and falls back to
+pure RBS, so behavior is unchanged.
 
 ## Development
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+librbs is a Ruby gem with a Rust extension (via [`rb_sys`][rb_sys] /
+magnus), so a Rust toolchain is required to build it.
 
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and the created tag, and push the `.gem` file to [rubygems.org](https://rubygems.org).
+```sh
+bin/setup             # install Ruby dependencies
+bundle exec rake      # compile the extension, then run specs and tests
+```
 
-## Contributing
+The design and the loader hot-path analysis live in
+[`docs/design.md`](docs/design.md).
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/librbs.
+[ca]: https://github.com/kaigionrails/conference-app
+[rb_sys]: https://github.com/oxidize-rb/rb-sys
